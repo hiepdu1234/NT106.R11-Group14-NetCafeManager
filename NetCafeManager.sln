@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCafeManager.Server", "src\NetCafeManager.Server\NetCafeManager.Server.csproj", "{A121E44B-04C7-42D0-8E4D-5D2BB8B44A11}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCafeManager.Admin", "src\NetCafeManager.Admin\NetCafeManager.Admin.csproj", "{F4B274C0-9A5A-4D59-8DA9-B2713C4FEC12}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCafeManager.Client", "src\NetCafeManager.Client\NetCafeManager.Client.csproj", "{D98A6187-CF85-480B-86D6-F29EE909D613}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCafeManager.Shared", "src\NetCafeManager.Shared\NetCafeManager.Shared.csproj", "{38CB3E85-303E-4499-BF5C-620021BC5B14}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetCafeManager.Infrastructure", "src\NetCafeManager.Infrastructure\NetCafeManager.Infrastructure.csproj", "{C449772B-1CF5-42E8-B580-26E61402A615}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A121E44B-04C7-42D0-8E4D-5D2BB8B44A11}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A121E44B-04C7-42D0-8E4D-5D2BB8B44A11}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A121E44B-04C7-42D0-8E4D-5D2BB8B44A11}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A121E44B-04C7-42D0-8E4D-5D2BB8B44A11}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F4B274C0-9A5A-4D59-8DA9-B2713C4FEC12}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F4B274C0-9A5A-4D59-8DA9-B2713C4FEC12}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F4B274C0-9A5A-4D59-8DA9-B2713C4FEC12}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F4B274C0-9A5A-4D59-8DA9-B2713C4FEC12}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D98A6187-CF85-480B-86D6-F29EE909D613}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D98A6187-CF85-480B-86D6-F29EE909D613}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D98A6187-CF85-480B-86D6-F29EE909D613}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D98A6187-CF85-480B-86D6-F29EE909D613}.Release|Any CPU.Build.0 = Release|Any CPU
+		{38CB3E85-303E-4499-BF5C-620021BC5B14}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{38CB3E85-303E-4499-BF5C-620021BC5B14}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{38CB3E85-303E-4499-BF5C-620021BC5B14}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{38CB3E85-303E-4499-BF5C-620021BC5B14}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C449772B-1CF5-42E8-B580-26E61402A615}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C449772B-1CF5-42E8-B580-26E61402A615}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C449772B-1CF5-42E8-B580-26E61402A615}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C449772B-1CF5-42E8-B580-26E61402A615}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
