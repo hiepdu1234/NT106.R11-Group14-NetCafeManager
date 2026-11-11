@@ -74,5 +74,13 @@ dotnet restore
 dotnet build NetCafeManager.sln
 ```
 
-CI Windows kiểm tra build và sinh migration tạm. Vẫn cần chạy schema SQL và seed
-trên một SQL Server thật trước khi đánh dấu hoàn thành và tạo Pull Request.
+CI thực hiện hai nhóm kiểm tra độc lập:
+
+- Windows: restore, build Release, tạo migration EF tạm, sinh SQL từ migration
+  và build lại solution.
+- SQL Server 2022: tạo database trống, chạy script schema, nạp seed hai lần để
+  kiểm tra tính lặp lại, sau đó xác nhận đủ 12 bảng, 3 gói giờ, 2 máy mẫu và
+  3 dịch vụ mẫu.
+
+Mục nền tảng cơ sở dữ liệu chỉ đủ điều kiện tạo Pull Request khi cả hai nhóm
+kiểm tra đều thành công.
