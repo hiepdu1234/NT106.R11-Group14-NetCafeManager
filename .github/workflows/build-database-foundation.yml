@@ -26,3 +26,15 @@ jobs:
 
       - name: Build solution
         run: dotnet build NetCafeManager.sln --configuration Release --no-restore
+
+      - name: Install EF Core CLI
+        run: dotnet tool install --global dotnet-ef --version 8.0.33
+
+      - name: Validate EF model with temporary migration
+        run: dotnet ef migrations add CiModelSmoke --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Infrastructure --output-dir Persistence/Migrations
+
+      - name: Generate migration SQL without connecting to database
+        run: dotnet ef migrations script --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Infrastructure --output ci-migration.sql
+
+      - name: Build generated migration
+        run: dotnet build NetCafeManager.sln --configuration Release --no-restore
