@@ -43,27 +43,36 @@
 Dữ liệu seed chỉ gồm gói giờ, máy mẫu, sản phẩm và dịch vụ mẫu. Không tạo sẵn
 tài khoản có mật khẩu để tránh lưu mật khẩu demo yếu trong repository.
 
-## Cách tạo migration bằng EF Core
+## EF Core migration
 
-Đặt chuỗi kết nối trong biến môi trường:
+`NetCafeDbContext` và design-time factory đã được viết, nhưng chưa commit
+migration do EF Core sinh ra. CI chỉ tạo migration tạm thời và xuất SQL để kiểm
+tra mô hình; các tệp tạm này không được tự động đưa vào repository.
+
+Nếu nhóm quyết định dùng EF migration thay script SQL ở trên, hãy tạo database
+mới riêng, cài CLI và sinh migration:
+
+```powershell
+dotnet tool install --global dotnet-ef --version 8.0.33
+dotnet ef migrations add InitialCreate --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Infrastructure --output-dir Persistence/Migrations
+```
+
+Sau khi review và commit migration, đặt chuỗi kết nối bằng biến môi trường:
 
 ```powershell
 $env:NETCAFE_DB_CONNECTION = "Server=(localdb)\MSSQLLocalDB;Database=NetCafeManager;Trusted_Connection=True;TrustServerCertificate=True"
 ```
 
-Sau đó chạy tại thư mục gốc repository:
-
-```powershell
-dotnet restore
-dotnet ef migrations add InitialCreate --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Server --output-dir Persistence/Migrations
-dotnet ef database update --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Server
-```
+Chỉ chạy `dotnet ef database update --project src/NetCafeManager.Infrastructure --startup-project src/NetCafeManager.Infrastructure`
+trên database mới nếu chọn hướng EF. **Không chạy cả script tạo bảng và EF
+database update trên cùng một database**, vì cả hai cùng tạo schema ban đầu.
 
 ## Kiểm tra
 
 ```powershell
+dotnet restore
 dotnet build NetCafeManager.sln
 ```
 
-Chỉ đánh dấu hoàn thành khi build không lỗi và cả migration lẫn seed chạy được
-trên một database mới.
+CI Windows kiểm tra build và sinh migration tạm. Vẫn cần chạy schema SQL và seed
+trên một SQL Server thật trước khi đánh dấu hoàn thành và tạo Pull Request.
