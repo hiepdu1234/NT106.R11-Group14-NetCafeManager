@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build:
+    name: Build and validate EF model
     runs-on: windows-latest
     steps:
       - name: Checkout source
@@ -38,3 +39,71 @@ jobs:
 
       - name: Build generated migration
         run: dotnet build NetCafeManager.sln --configuration Release --no-restore
+
+  database-smoke-test:
+    name: Run schema and seed on SQL Server
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: NetCafe_CI_2026!Only
+        ports:
+          - 1433:1433
+    env:
+      MSSQL_SA_PASSWORD: NetCafe_CI_2026!Only
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Wait for SQL Server
+        shell: bash
+        run: |
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          for attempt in {1..45}; do
+            if docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C \
+              -Q "SELECT 1" > /dev/null 2>&1; then
+              echo "SQL Server is ready."
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$SQL_CONTAINER"
+          exit 1
+
+      - name: Create clean database
+        shell: bash
+        run: |
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
+            -Q "CREATE DATABASE [NetCafeManager];"
+
+      - name: Apply initial schema
+        shell: bash
+        run: |
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          docker exec -i "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
+            -d NetCafeManager < database/migrations/001_initial_schema.sql
+
+      - name: Load seed twice to verify repeatability
+        shell: bash
+        run: |
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          for attempt in 1 2; do
+            docker exec -i "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
+              -d NetCafeManager < database/seed/001_seed_core.sql
+          done
+
+      - name: Verify tables and sample data
+        shell: bash
+        run: |
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
+            -d NetCafeManager \
+            -Q "SET NOCOUNT ON; IF (SELECT COUNT(*) FROM sys.tables WHERE is_ms_shipped = 0) <> 12 THROW 51000, 'Expected 12 application tables.', 1; IF (SELECT COUNT(*) FROM dbo.GOI_GIO) <> 3 THROW 51001, 'Unexpected hour-package seed count.', 1; IF (SELECT COUNT(*) FROM dbo.MAY_TINH) <> 2 THROW 51002, 'Unexpected computer seed count.', 1; IF (SELECT COUNT(*) FROM dbo.DICH_VU) <> 3 THROW 51003, 'Unexpected service seed count.', 1; SELECT N'Database smoke test passed.' AS Result;"
