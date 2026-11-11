@@ -1,0 +1,28 @@
+name: Build database foundation
+
+on:
+  push:
+    branches:
+      - feature/database-foundation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore packages
+        run: dotnet restore NetCafeManager.sln
+
+      - name: Build solution
+        run: dotnet build NetCafeManager.sln --configuration Release --no-restore
