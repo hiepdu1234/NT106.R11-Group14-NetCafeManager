@@ -109,6 +109,8 @@ BEGIN TRY
         (
             (
                 LoaiDV = N'SanPham'
+                AND SoLuongTon IS NOT NULL
+                AND MucTonChuan IS NOT NULL
                 AND SoLuongTon >= 0
                 AND MucTonChuan > 0
             )
@@ -161,7 +163,8 @@ BEGIN TRY
             (CONVERT(DECIMAL(12, 2), SoLuong * DonGiaApDung)) PERSISTED,
         CONSTRAINT PK_CHI_TIET_DICH_VU PRIMARY KEY (MaCTDV),
         CONSTRAINT FK_CHI_TIET_DICH_VU_PHIEN FOREIGN KEY (MaPhien)
-            REFERENCES dbo.PHIEN_SU_DUNG (MaPhien),
+            REFERENCES dbo.PHIEN_SU_DUNG (MaPhien)
+            ON DELETE CASCADE,
         CONSTRAINT FK_CHI_TIET_DICH_VU_DICH_VU FOREIGN KEY (MaDV)
             REFERENCES dbo.DICH_VU (MaDV),
         CONSTRAINT CK_CHI_TIET_DICH_VU_SoLuong CHECK (SoLuong > 0),

@@ -207,7 +207,8 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
                 table.HasCheckConstraint("CK_DICH_VU_DonGia", "[DonGia] >= 0");
                 table.HasCheckConstraint(
                     "CK_DICH_VU_TonKho",
-                    "([LoaiDV] = N'SanPham' AND [SoLuongTon] >= 0 AND [MucTonChuan] > 0) "
+                    "([LoaiDV] = N'SanPham' AND [SoLuongTon] IS NOT NULL "
+                    + "AND [MucTonChuan] IS NOT NULL AND [SoLuongTon] >= 0 AND [MucTonChuan] > 0) "
                     + "OR ([LoaiDV] = N'NguQuaDem' AND [SoLuongTon] IS NULL AND [MucTonChuan] IS NULL)");
             });
 
