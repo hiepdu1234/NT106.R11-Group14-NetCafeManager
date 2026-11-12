@@ -7,7 +7,13 @@ $ErrorActionPreference = "Stop"
 
 function New-RandomBase64([int]$ByteCount = 32) {
     $bytes = [byte[]]::new($ByteCount)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    }
+    finally {
+        $rng.Dispose()
+    }
     return [Convert]::ToBase64String($bytes)
 }
 
