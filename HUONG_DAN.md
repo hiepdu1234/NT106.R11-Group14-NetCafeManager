@@ -1,4 +1,4 @@
- feature/balance-topup-hour-packages
+feature/balance-topup-hour-packages
 # Gói 02 - Nạp tiền, số dư và gói giờ
 
 ## Nhánh đề xuất
@@ -29,10 +29,8 @@ dotnet build tests/NetCafeManager.BillingSmoke --configuration Release
 ## Phần đang chờ Quân
 
 Tự động trừ tiền theo phiên, gửi cảnh báo qua TCP và khóa máy khi hết tiền.
-=======
 Updated upstream
 # Hướng dẫn các gói chức năng của Tuấn Hiệp
-=======
 # Gói 03 - Lập hóa đơn
  Stashed changes
 
@@ -100,7 +98,6 @@ dotnet build tests/NetCafeManager.BillingSmoke/NetCafeManager.BillingSmoke.cspro
 - Tự động trừ tiền theo phiên sử dụng máy.
 - Gửi cảnh báo qua TCP khi tài khoản sắp hết tiền.
 - Khóa hoặc đăng xuất máy trạm khi phiên kết thúc hoặc hết tiền.
-=======
 `Thêm: Lập và cập nhật trạng thái hóa đơn`
 
 ## Phần đang chờ Quân
