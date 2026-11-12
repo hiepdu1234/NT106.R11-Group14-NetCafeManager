@@ -25,6 +25,7 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
     {
         ArgumentNullException.ThrowIfNull(username);
         cancellationToken.ThrowIfCancellationRequested();
+
         string lookup = username.Trim();
         if (lookup.Length is 0 or > MaxUsernameLength)
         {
