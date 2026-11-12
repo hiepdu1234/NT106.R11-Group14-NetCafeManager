@@ -55,6 +55,20 @@ public sealed class SessionManager
     public bool Revoke(string token) =>
         !string.IsNullOrWhiteSpace(token) && _sessions.TryRemove(token, out _);
 
+    public int RevokeAllForUser(Guid userId)
+    {
+        int revokedCount = 0;
+        foreach ((string token, UserSession session) in _sessions)
+        {
+            if (session.UserId == userId && _sessions.TryRemove(token, out _))
+            {
+                revokedCount++;
+            }
+        }
+
+        return revokedCount;
+    }
+
     private static string CreateSecureToken()
     {
         byte[] bytes = RandomNumberGenerator.GetBytes(32);

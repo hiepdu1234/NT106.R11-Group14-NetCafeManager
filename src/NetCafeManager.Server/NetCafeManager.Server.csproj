@@ -7,4 +7,7 @@
     <ProjectReference Include="..\NetCafeManager.Shared\NetCafeManager.Shared.csproj" />
     <ProjectReference Include="..\NetCafeManager.Infrastructure\NetCafeManager.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="5.0.0" />
+  </ItemGroup>
 </Project>
