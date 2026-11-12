@@ -47,9 +47,9 @@ Smoke test SQL Server kiểm tra proof sai, chống replay, ánh xạ máy, ch�
 khoản dùng hai máy, chặn hai tài khoản dùng một máy, kiểm tra số dư, tính phí và
 không tính tiền hai lần khi kết thúc phiên.
 
-## Chưa thuộc gói này
+## Trạng thái tích hợp
 
-- Không sửa `Program.cs`, TCP listener, framing hoặc message handler.
-- Không sửa giao diện Client/Admin WinForms.
-- Việc tự động kết thúc ngay khi số dư cạn cần bộ lập lịch của Server sau khi
-  nhánh TCP và vòng đời kết nối được hợp nhất.
+- `Program.cs`, TCP listener và các message handler đã dùng các service của gói này.
+- Client WinForms demo đã có luồng handshake, đăng nhập, mở và kết thúc phiên.
+- Server kết thúc phiên khi đăng xuất hoặc khi phát hiện kết nối bị đóng.
+- Việc tự động kết thúc đúng thời điểm số dư cạn vẫn cần bộ lập lịch riêng của Server.

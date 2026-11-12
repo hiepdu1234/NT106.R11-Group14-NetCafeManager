@@ -1,5 +1,6 @@
 
 using System.Text.Json;
+using NetCafeManager.Server.Networking;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Networking;
 
@@ -20,11 +21,37 @@ public sealed class AuthTcpHandler
 
     public async Task<NetworkMessage?> HandleAsync(
         NetworkMessage request,
+        TcpConnectionContext context,
         CancellationToken cancellationToken = default)
     {
-        if (request.Type != "AUTH_LOGIN")
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        if (request.Type == NetworkMessageTypes.AuthLogout)
+        {
+            bool revoked = context.SessionToken is not null &&
+                           _authentication.Logout(context.SessionToken);
+            context.ClearAuthentication();
+            return NetworkResponseFactory.Result(request, new
+            {
+                isSuccess = revoked,
+                message = revoked
+                    ? "Đăng xuất thành công."
+                    : "Phiên đăng nhập không còn hiệu lực."
+            });
+        }
+
+        if (request.Type != NetworkMessageTypes.AuthLogin)
         {
             return null;
+        }
+
+        if (context.ActiveUsageSession is not null)
+        {
+            return NetworkResponseFactory.Error(
+                request,
+                "AUTH_ACTIVE_USAGE_SESSION",
+                "Hãy kết thúc phiên sử dụng trước khi đăng nhập lại.");
         }
 
         LoginRequest? loginRequest;
@@ -48,27 +75,35 @@ public sealed class AuthTcpHandler
             loginRequest,
             cancellationToken);
 
-        return new NetworkMessage(
-            Guid.NewGuid().ToString("N"),
-            "COMMAND_RESULT",
-            request.MachineId,
-            request.Id,
-            JsonSerializer.SerializeToElement(result, JsonOptions));
+        if (result.IsSuccess &&
+            result.User is not null &&
+            result.SessionToken is not null)
+        {
+            if (context.SessionToken is not null)
+            {
+                _authentication.Logout(context.SessionToken);
+            }
+
+            context.User = result.User;
+            context.SessionToken = result.SessionToken;
+        }
+
+        return NetworkResponseFactory.Result(request, result);
     }
+
+    // Giữ overload cũ cho các bài kiểm tra chỉ kiểm tra AUTH_LOGIN.
+    public Task<NetworkMessage?> HandleAsync(
+        NetworkMessage request,
+        CancellationToken cancellationToken = default) =>
+        HandleAsync(request, new TcpConnectionContext(), cancellationToken);
 
     private static NetworkMessage CreateInvalidRequestResponse(
         NetworkMessage request)
     {
-        return new NetworkMessage(
-            Guid.NewGuid().ToString("N"),
-            "ERROR",
-            request.MachineId,
-            request.Id,
-            JsonSerializer.SerializeToElement(new
-            {
-                code = "AUTH_INVALID_REQUEST",
-                message = "Du lieu dang nhap khong hop le."
-            }));
+        return NetworkResponseFactory.Error(
+            request,
+            "AUTH_INVALID_REQUEST",
+            "Dữ liệu đăng nhập không hợp lệ.");
     }
 }
 
