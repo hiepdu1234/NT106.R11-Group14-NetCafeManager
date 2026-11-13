@@ -81,6 +81,17 @@ try
     var otpHandler = new PasswordResetTcpHandler(services.PasswordReset);
     var context = new TcpConnectionContext();
 
+    NetworkMessage rejectedLogin = (await authHandler.HandleAsync(
+        Message(
+            NetworkMessageTypes.AuthLogin,
+            new LoginRequest(username, password)),
+        context))!;
+    Require(
+        rejectedLogin.Type == "ERROR" &&
+        rejectedLogin.Data.TryGetProperty("code", out JsonElement errorCode) &&
+        errorCode.GetString() == "AUTH_MACHINE_REQUIRED",
+        "Server phải từ chối đăng nhập trước khi xác thực thiết bị.");
+
     NetworkMessage beginResponse = (await machineHandler.HandleAsync(
         Message(
             NetworkMessageTypes.MachineHandshakeBegin,
