@@ -50,9 +50,9 @@ Phần lõi tương ứng với bốn message type trong tài liệu thiết k�
 | `AUTH_VERIFY_OTP` | `PasswordResetService.VerifyOtpAsync` |
 | `AUTH_RESET_PASSWORD` | `PasswordResetService.CompleteAsync` |
 
-Chưa nối các hàm này vào TCP handler và WinForms vì cần dùng chung cấu trúc
-message, framing và mã lỗi trên nhánh mạng của Quân. Chỉ gửi mật khẩu và OTP
-qua kênh đã mã hóa.
+Các hàm này đã được nối vào TCP handler và giao diện WinForms demo bằng các
+message type tương ứng. Bản hiện tại chỉ lắng nghe loopback; không mở ra LAN
+cho đến khi bổ sung TLS và xác minh chứng thư Server.
 
 ## Kiểm thử
 
@@ -70,8 +70,8 @@ Không chạy smoke test bằng chuỗi kết nối tới database thật.
 ## Trạng thái bốn cơ chế xác thực
 
 1. PBKDF2 cho tài khoản: đã có và đã nối SQL Server.
-2. Handshake định danh máy trạm: chờ tích hợp nhánh TCP.
-3. Xác thực phiên chơi theo máy, số dư và đăng nhập đồng thời: chờ tích hợp
-   TCP và nghiệp vụ phiên sử dụng.
-4. Khôi phục mật khẩu OTP: lõi Server, adapter SMTP và kiểm thử đã có; còn
-   TCP handler và giao diện WinForms.
+2. Handshake định danh máy trạm: đã nối vào ngữ cảnh từng kết nối TCP.
+3. Xác thực phiên chơi theo máy, số dư và đăng nhập đồng thời: đã nối TCP;
+   tự kết thúc phiên khi đăng xuất hoặc mất kết nối có kiểm soát.
+4. Khôi phục mật khẩu OTP: đã có lõi Server, SMTP, TCP handler, giao diện
+   WinForms demo và smoke test.

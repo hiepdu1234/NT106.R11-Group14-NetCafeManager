@@ -1,15 +1,22 @@
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows.Forms;
 using NetCafeManager.Client.Networking;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Networking;
+using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Client;
 
-
+/// <summary>
+/// Giao dien Client ghep voi giao thuc handshake, dang nhap va phien tu main.
+/// Bao gom cac man hinh dang nhap, quen mat khau, OTP, dat lai mat khau.
+/// Chua tach thanh cac UserControl theo kien truc muc tieu cua nhom.
+/// Chi thu tren localhost voi du lieu gia cho toi khi he thong co TLS.
+/// </summary>
 public sealed class MainForm : Form
 {
     private const string ServerIp = "127.0.0.1";
@@ -54,6 +61,18 @@ public sealed class MainForm : Form
         Text = "Chế độ phát triển: chỉ thử bằng dữ liệu giả trên localhost."
     };
 
+    // Giu nguyen giao thuc xac thuc may va phien dang dung tren main.
+    private readonly TextBox _machineName = NewTextBox("Tên máy");
+    private readonly TextBox _machineKey = NewTextBox("Khóa máy Base64", isPassword: true);
+    private readonly Label _machineStatus = Hint("Máy chưa được xác thực.");
+    private readonly ComboBox _recoveryRole = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        AccessibleName = "Vai trò tài khoản khôi phục",
+        Font = new Font("Segoe UI", 11),
+        Margin = new Padding(0, 5, 0, 13)
+    };
+
     private readonly TextBox _loginUsername = NewTextBox("Tên đăng nhập");
     private readonly TextBox _loginPassword = NewTextBox("Mật khẩu", isPassword: true);
     private readonly TextBox _identifier = NewTextBox("Tên đăng nhập hoặc email đã đăng ký");
@@ -63,6 +82,13 @@ public sealed class MainForm : Form
 
     private readonly ErrorProvider _errors = new();
 
+    private Button? _handshakeButton;
+    private Button? _machineLink;
+    private Button? _endSessionButton;
+    private TcpClientAgent? _client;
+    private UsageSessionSummary? _activeSession;
+    private bool _machineVerified;
+    private bool _authenticated;
     private Button? _loginButton;
     private Button? _requestOtpButton;
     private Button? _verifyOtpButton;
@@ -85,12 +111,31 @@ public sealed class MainForm : Form
 
         _errors.ContainerControl = this;
         _errors.BlinkStyle = ErrorBlinkStyle.NeverBlink;
-        FormClosed += (_, _) => _errors.Dispose();
+        FormClosed += (_, _) =>
+        {
+            ResetConnection();
+            _errors.Dispose();
+        };
+
+        _machineName.Text = DemoMachineId;
+        _recoveryRole.Items.AddRange([UserRole.Client, UserRole.Administrator]);
+        _recoveryRole.SelectedItem = UserRole.Client;
+        _recoveryRole.SelectedIndexChanged += (_, _) => InvalidateRecovery();
+        _machineName.TextChanged += (_, _) =>
+        {
+            if (_machineVerified || _authenticated)
+            {
+                ResetConnection();
+                SetStatus("Tên máy đã đổi. Hãy xác thực máy lại.");
+            }
+        };
 
         _otp.MaxLength = 6;
         _newPassword.MaxLength = 128;
         _confirmPassword.MaxLength = 128;
         _loginPassword.MaxLength = 128;
+        _machineName.MaxLength = 50;
+        _machineKey.MaxLength = 512;
 
         // Neu nguoi dung sua tai khoan trong khi dang khoi phuc,
         // phai xac minh OTP lai; khong giu trang thai cu.
@@ -215,18 +260,39 @@ public sealed class MainForm : Form
 
     private void BuildPages()
     {
-        // Man hinh 1: Dang nhap Client (Administrator thuoc ung dung Admin rieng).
+        // Man hinh 0: thiet lap/xac thuc may (dung giao thuc tren main).
+        TableLayoutPanel machine = NewPage(
+            "XÁC THỰC MÁY TRẠM", "Bước thiết lập bắt buộc trước khi đăng nhập.");
+        AddField(machine, "Tên máy", _machineName);
+        AddField(machine, "Khóa máy Base64", _machineKey);
+        AddItem(machine, Hint(
+            "Dùng khóa máy thử nghiệm đã cấp qua cấu hình demo. Không lưu khóa vào mã nguồn."));
+        _handshakeButton = NewButton("Kết nối và xác thực máy", isPrimary: true);
+        _handshakeButton.Click += async (_, _) => await ExecuteAsync(HandshakeAsync);
+        AddItem(machine, _handshakeButton);
+        AddItem(machine, _machineStatus);
+        AddBackButton(machine, "login");
+        RegisterPage("machine", machine);
+
+        // Man hinh 1: dang nhap; giu session Client tren cung ket noi TCP.
         TableLayoutPanel login = NewPage(
             "ĐĂNG NHẬP", "Đăng nhập tài khoản người chơi để tiếp tục.");
+        _machineLink = NewButton("Cấu hình / xác thực máy trạm");
+        _machineLink.Click += (_, _) => ShowPage("machine");
+        AddItem(login, _machineLink);
+        AddItem(login, Hint("Cần xác thực máy trước khi đăng nhập hoặc mở phiên."));
         AddField(login, "Tên đăng nhập", _loginUsername);
         AddField(login, "Mật khẩu", _loginPassword);
         _showLoginPassword = NewCheckBox("Hiện mật khẩu");
         _showLoginPassword.CheckedChanged += (_, _) =>
             _loginPassword.UseSystemPasswordChar = !_showLoginPassword.Checked;
         AddItem(login, _showLoginPassword);
-        _loginButton = NewButton("Đăng nhập", isPrimary: true);
+        _loginButton = NewButton("Đăng nhập và mở phiên", isPrimary: true);
         _loginButton.Click += async (_, _) => await ExecuteAsync(LoginAsync);
         AddItem(login, _loginButton);
+        _endSessionButton = NewButton("Kết thúc phiên và đăng xuất");
+        _endSessionButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
+        AddItem(login, _endSessionButton);
         Button forgotLink = NewButton("Quên mật khẩu?");
         forgotLink.Click += (_, _) => ShowPage("forgot");
         AddItem(login, forgotLink);
@@ -237,6 +303,7 @@ public sealed class MainForm : Form
         TableLayoutPanel forgot = NewPage(
             "QUÊN MẬT KHẨU", "Nhập thông tin tài khoản để yêu cầu mã OTP.");
         AddField(forgot, "Tên đăng nhập hoặc email", _identifier);
+        AddField(forgot, "Vai trò tài khoản", _recoveryRole);
         AddItem(forgot, Hint("Mã xác nhận sẽ được gửi về email đăng ký nếu thông tin hợp lệ."));
         _requestOtpButton = NewButton("Yêu cầu mã OTP", isPrimary: true);
         _requestOtpButton.Click += async (_, _) => await ExecuteAsync(RequestOtpAsync);
@@ -426,6 +493,7 @@ public sealed class MainForm : Form
 
         AcceptButton = key switch
         {
+            "machine" => _handshakeButton,
             "login" => _loginButton,
             "forgot" => _requestOtpButton,
             "otp" => _verifyOtpButton,
@@ -438,6 +506,7 @@ public sealed class MainForm : Form
         {
             Control focus = key switch
             {
+                "machine" => _machineName,
                 "login" => _loginUsername,
                 "forgot" => _identifier,
                 "otp" => _otp,
@@ -454,6 +523,14 @@ public sealed class MainForm : Form
             button.Enabled = !_busy;
         if (_resetButton is not null)
             _resetButton.Enabled = !_busy && _recoveryStage == RecoveryStage.OtpVerified;
+        if (_endSessionButton is not null)
+            _endSessionButton.Enabled = !_busy && _authenticated;
+        if (_machineLink is not null)
+            _machineLink.Enabled = !_busy && !_authenticated;
+        if (_handshakeButton is not null)
+            _handshakeButton.Enabled = !_busy && !_authenticated;
+        if (_loginButton is not null)
+            _loginButton.Enabled = !_busy && !_authenticated;
     }
 
     private void InvalidateRecovery()
@@ -477,15 +554,27 @@ public sealed class MainForm : Form
         }
         catch (OperationCanceledException)
         {
-            SetStatus("Máy chủ không phản hồi đúng thời gian. Bạn có thể thử lại.", error: true);
+            ResetConnection();
+            SetStatus("Máy chủ không phản hồi đúng thời gian. Hãy kết nối lại.", error: true);
         }
         catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
         {
+            ResetConnection();
             SetStatus("Không kết nối được tới Server tại localhost:5050.", error: true);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
+            ResetConnection();
             SetStatus("Phản hồi từ Server không đúng định dạng giao thức.", error: true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Chi hien thi thong bao nghiep vu; khong in mat khau/token/OTP.
+            SetStatus(ex.Message, error: true);
+        }
+        catch (FormatException)
+        {
+            SetStatus("Khóa máy Base64 không đúng định dạng.", error: true);
         }
         catch (Exception)
         {
@@ -499,19 +588,159 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task<NetworkMessage> SendAsync<T>(string type, T payload)
+    // TCP ket noi dai han: server luu Machine/Authentication/Session theo ket noi.
+    // Khong mo TcpClient moi cho moi AUTH_LOGIN/SESSION_START.
+    private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
+        if (_client is not null) return;
+        var client = new TcpClientAgent();
+        try
+        {
+            await client.ConnectAsync(ServerIp, ServerPort, cancellationToken);
+            _client = client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<NetworkMessage> SendAsync<T>(
+        string type,
+        T payload,
+        CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken);
         SetStatus("Đang gửi yêu cầu tới Server...");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var client = new TcpClientAgent();
-        await client.ConnectAsync(ServerIp, ServerPort, timeout.Token);
         var request = new NetworkMessage(
             Guid.NewGuid().ToString("N"),
             type,
-            DemoMachineId,
+            _machineName.Text.Trim(),
             null,
             JsonSerializer.SerializeToElement(payload, JsonOptions));
-        return await client.SendRequestAsync(request, timeout.Token);
+        NetworkMessage response = await _client!.SendRequestAsync(request, cancellationToken);
+        string? error = ReadError(response);
+        if (error is not null)
+            throw new InvalidOperationException(error);
+        if (response.Type != NetworkMessageTypes.CommandResult)
+            throw new InvalidDataException("Server trả về loại thông điệp không hợp lệ.");
+        return response;
+    }
+
+    private async Task<T> SendResultAsync<T>(
+        string type,
+        object payload,
+        CancellationToken cancellationToken) where T : class
+    {
+        NetworkMessage response = await SendAsync(type, payload, cancellationToken);
+        return response.Data.Deserialize<T>(JsonOptions)
+               ?? throw new InvalidDataException("Server trả dữ liệu không hợp lệ.");
+    }
+
+    private void ResetConnection()
+    {
+        _client?.Dispose();
+        _client = null;
+        _activeSession = null;
+        _machineVerified = false;
+        _authenticated = false;
+        _machineStatus.Text = "Máy chưa được xác thực.";
+        UpdateButtonStates();
+    }
+
+    private void EnsureMachineVerified()
+    {
+        if (_client is null || !_machineVerified)
+            throw new InvalidOperationException("Hãy xác thực máy trạm trước khi đăng nhập.");
+    }
+
+    private UserRole SelectedRole() =>
+        _recoveryRole.SelectedItem is UserRole role ? role : UserRole.Client;
+
+    private async Task HandshakeAsync()
+    {
+        if (!Require(_machineName, "Vui lòng nhập tên máy.")) return;
+        if (!Require(_machineKey, "Vui lòng nhập khóa máy Base64.")) return;
+
+        byte[] machineKey;
+        try
+        {
+            machineKey = Convert.FromBase64String(_machineKey.Text.Trim());
+        }
+        catch (FormatException)
+        {
+            _machineKey.Clear();
+            SetStatus("Khóa máy Base64 không hợp lệ.", error: true);
+            return;
+        }
+        if (machineKey.Length < 32)
+        {
+            CryptographicOperations.ZeroMemory(machineKey);
+            _machineKey.Clear();
+            SetStatus("Khóa máy phải chứa ít nhất 32 byte.", error: true);
+            return;
+        }
+
+        try
+        {
+            ResetConnection();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            SessionResult<MachineHandshakeChallenge> challenge =
+                await SendResultAsync<SessionResult<MachineHandshakeChallenge>>(
+                    NetworkMessageTypes.MachineHandshakeBegin,
+                    new MachineHandshakeBeginRequest(_machineName.Text.Trim()),
+                    timeout.Token);
+            if (!challenge.IsSuccess || challenge.Value is null)
+                throw new InvalidOperationException(challenge.Message);
+
+            string proof = MachineHandshakeProof.ComputeBase64(machineKey, challenge.Value);
+            SessionResult<VerifiedMachine> completed =
+                await SendResultAsync<SessionResult<VerifiedMachine>>(
+                    NetworkMessageTypes.MachineHandshakeComplete,
+                    new MachineHandshakeCompleteRequest(challenge.Value.ChallengeId, proof),
+                    timeout.Token);
+            if (!completed.IsSuccess || completed.Value is null)
+                throw new InvalidOperationException(completed.Message);
+
+            _machineVerified = true;
+            _machineStatus.Text = $"Đã xác thực: {completed.Value.MachineName}";
+            ShowPage("login");
+            SetStatus($"Máy {completed.Value.MachineName} đã xác thực. Có thể đăng nhập.", success: true);
+        }
+        catch
+        {
+            ResetConnection();
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(machineKey);
+            _machineKey.Clear();
+        }
+    }
+
+    private async Task EndSessionAsync()
+    {
+        if (!_authenticated) return;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        if (_activeSession is not null)
+        {
+            SessionResult<UsageSessionSummary> ended =
+                await SendResultAsync<SessionResult<UsageSessionSummary>>(
+                    NetworkMessageTypes.SessionEnd,
+                    new EndUsageSessionRequest(_activeSession.SessionId, "DangXuat"),
+                    timeout.Token);
+            if (!ended.IsSuccess)
+                throw new InvalidOperationException(ended.Message);
+            _activeSession = null;
+        }
+
+        // Server huy session token theo context va tra COMMAND_RESULT.
+        await SendAsync(NetworkMessageTypes.AuthLogout, new { }, timeout.Token);
+        _authenticated = false;
+        UpdateButtonStates();
+        SetStatus("Đã kết thúc phiên và đăng xuất.", success: true);
     }
 
     private static string? ReadError(NetworkMessage response)
@@ -529,13 +758,6 @@ public sealed class MainForm : Form
         return code == "E001"
             ? "Server chưa triển khai lệnh này (E001)."
             : $"{message} ({code})";
-    }
-
-    private static T? ReadResult<T>(NetworkMessage response)
-    {
-        if (response.Type != "COMMAND_RESULT")
-            return default;
-        return response.Data.Deserialize<T>(JsonOptions);
     }
 
     private void SetStatus(string message, bool error = false, bool success = false)
@@ -557,6 +779,7 @@ public sealed class MainForm : Form
 
     private async Task LoginAsync()
     {
+        EnsureMachineVerified();
         if (!Require(_loginUsername, "Vui lòng nhập tên đăng nhập.")) return;
         if (!Require(_loginPassword, "Vui lòng nhập mật khẩu.")) return;
 
@@ -564,34 +787,39 @@ public sealed class MainForm : Form
         string password = _loginPassword.Text;
         try
         {
-            NetworkMessage response = await SendAsync(
-                "AUTH_LOGIN", new LoginRequest(username, password));
-            string? error = ReadError(response);
-            if (error is not null)
-            {
-                SetStatus(error, error: true);
-                return;
-            }
-            LoginResponse? result = ReadResult<LoginResponse>(response);
-            if (result is null)
-            {
-                SetStatus("Server trả kết quả đăng nhập không hợp lệ.", error: true);
-                return;
-            }
-            if (result.IsSuccess)
-            {
-                SetStatus($"Đăng nhập thành công: {result.User?.Username ?? username}.", success: true);
-                MessageBox.Show(this,
-                    "Đăng nhập thành công. Màn hình phiên sử dụng sẽ được tích hợp sau.",
-                    "NetCafeManager", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                // Token va phien su dung do phan tich hop xu ly, khong log ra UI.
-            }
-            else
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            LoginResponse result = await SendResultAsync<LoginResponse>(
+                NetworkMessageTypes.AuthLogin,
+                new LoginRequest(username, password),
+                timeout.Token);
+            if (!result.IsSuccess || result.User is null)
             {
                 SetStatus(result.Message, error: true);
                 MessageBox.Show(this, result.Message, "Đăng nhập thất bại",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
+
+            // Phien su dung phai mo tren dung TCP connection vua dang nhap.
+            if (result.User.Role == UserRole.Client)
+            {
+                SessionResult<UsageSessionSummary> started =
+                    await SendResultAsync<SessionResult<UsageSessionSummary>>(
+                        NetworkMessageTypes.SessionStart, new { }, timeout.Token);
+                if (!started.IsSuccess || started.Value is null)
+                    throw new InvalidOperationException(started.Message);
+                _activeSession = started.Value;
+                SetStatus($"Đăng nhập thành công: {username}. Phiên #{started.Value.SessionId}; " +
+                    $"số dư {started.Value.RemainingBalance:N0} đồng.", success: true);
+            }
+            else
+            {
+                SetStatus($"Đăng nhập thành công: {username} ({result.User.Role}).", success: true);
+            }
+            _authenticated = true;
+            UpdateButtonStates();
+            MessageBox.Show(this, "Đăng nhập thành công.", "NetCafeManager",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         finally
         {
@@ -603,16 +831,12 @@ public sealed class MainForm : Form
     {
         if (!Require(_identifier, "Vui lòng nhập tên đăng nhập hoặc email.")) return;
         string identifier = _identifier.Text.Trim();
-        NetworkMessage response = await SendAsync(
-            "AUTH_FORGOT_PASSWORD",
-            new RequestPasswordResetRequest(identifier, UserRole.Client));
-        string? error = ReadError(response);
-        if (error is not null)
-        {
-            SetStatus(error, error: true);
-            return;
-        }
-        PasswordResetResponse? result = ReadResult<PasswordResetResponse>(response);
+        _recoveryStage = RecoveryStage.None;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        PasswordResetResponse result = await SendResultAsync<PasswordResetResponse>(
+            NetworkMessageTypes.AuthForgotPassword,
+            new RequestPasswordResetRequest(identifier, SelectedRole()),
+            timeout.Token);
         if (result?.IsSuccess == true)
         {
             _recoveryStage = RecoveryStage.OtpRequested;
@@ -641,16 +865,12 @@ public sealed class MainForm : Form
             SetStatus("Mã OTP phải gồm đúng 6 chữ số từ 0 đến 9.", error: true);
             return;
         }
-        NetworkMessage response = await SendAsync(
-            "AUTH_VERIFY_OTP",
-            new VerifyPasswordResetOtpRequest(_identifier.Text.Trim(), UserRole.Client, otp));
-        string? error = ReadError(response);
-        if (error is not null)
-        {
-            SetStatus(error, error: true);
-            return;
-        }
-        PasswordResetResponse? result = ReadResult<PasswordResetResponse>(response);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        PasswordResetResponse result = await SendResultAsync<PasswordResetResponse>(
+            NetworkMessageTypes.AuthVerifyOtp,
+            new VerifyPasswordResetOtpRequest(
+                _identifier.Text.Trim(), SelectedRole(), otp),
+            timeout.Token);
         if (result?.IsSuccess == true)
         {
             _recoveryStage = RecoveryStage.OtpVerified;
@@ -688,23 +908,19 @@ public sealed class MainForm : Form
         string password = _newPassword.Text;
         try
         {
-            NetworkMessage response = await SendAsync(
-                "AUTH_RESET_PASSWORD",
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            PasswordResetResponse result = await SendResultAsync<PasswordResetResponse>(
+                NetworkMessageTypes.AuthResetPassword,
                 new CompletePasswordResetRequest(
-                    _identifier.Text.Trim(), UserRole.Client, _otp.Text.Trim(), password));
-            string? error = ReadError(response);
-            if (error is not null)
-            {
-                SetStatus(error, error: true);
-                return;
-            }
-            PasswordResetResponse? result = ReadResult<PasswordResetResponse>(response);
+                    _identifier.Text.Trim(), SelectedRole(), _otp.Text.Trim(), password),
+                timeout.Token);
             if (result?.IsSuccess == true)
             {
                 _recoveryStage = RecoveryStage.None;
                 _otp.Clear();
+                ResetConnection();
                 ShowPage("login");
-                SetStatus(result.Message, success: true);
+                SetStatus(result.Message + " Hãy xác thực máy trước khi đăng nhập lại.", success: true);
                 MessageBox.Show(this, result.Message, "NetCafeManager",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
