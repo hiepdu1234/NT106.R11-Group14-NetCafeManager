@@ -48,6 +48,23 @@ public sealed class AuthenticationService
             return LoginResponse.Failure(InvalidCredentialsCode, InvalidCredentialsMessage);
         }
 
+        if (_passwordHasher.NeedsRehash(account.PasswordHash))
+        {
+            PasswordHash upgradedHash = _passwordHasher.HashPassword(request.Password);
+            bool updated = await _accounts.UpdatePasswordHashAsync(
+                account.Id,
+                upgradedHash,
+                cancellationToken);
+            if (!updated)
+            {
+                return LoginResponse.Failure(
+                    InvalidCredentialsCode,
+                    InvalidCredentialsMessage);
+            }
+
+            account.PasswordHash = upgradedHash;
+        }
+
         UserSession session = _sessions.Create(account, _timeProvider.GetUtcNow());
         AuthenticatedUser user = new(
             account.Id,

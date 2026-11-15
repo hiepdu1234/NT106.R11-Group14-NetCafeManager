@@ -55,7 +55,12 @@ catch (Exception exception)
         exception);
 }
 
-var hasher = new Pbkdf2PasswordHasher();
+int passwordHashIterations = ReadOptionalInteger(
+    "NETCAFE_PBKDF2_ITERATIONS",
+    Pbkdf2PasswordHasher.DefaultIterations,
+    Pbkdf2PasswordHasher.MinimumAcceptedIterations,
+    Pbkdf2PasswordHasher.MaximumAcceptedIterations);
+var hasher = new Pbkdf2PasswordHasher(passwordHashIterations);
 await UpsertAccountAsync(
     clientUsername,
     clientEmail,
@@ -193,6 +198,29 @@ static void ValidateIdentifier(
         throw new InvalidOperationException(
             $"{variableName} phải có từ 1 đến {maximumLength} ký tự.");
     }
+}
+
+static int ReadOptionalInteger(
+    string variableName,
+    int fallback,
+    int minimum,
+    int maximum)
+{
+    string? raw = Environment.GetEnvironmentVariable(variableName);
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        return fallback;
+    }
+
+    if (!int.TryParse(raw, out int value) ||
+        value < minimum ||
+        value > maximum)
+    {
+        throw new InvalidOperationException(
+            $"{variableName} phải nằm trong khoảng {minimum}-{maximum}.");
+    }
+
+    return value;
 }
 
 static string ReadEnvironment(string variableName, string fallback) =>

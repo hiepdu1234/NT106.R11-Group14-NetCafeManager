@@ -1,3 +1,4 @@
+using NetCafeManager.Infrastructure.Security;
 using System.Globalization;
 using System.Net;
 using NetCafeManager.Server.Authentication;
@@ -26,6 +27,11 @@ internal static class Program
             "NETCAFE_OTP_HASH_SECRET_BASE64");
         decimal hourlyRate = ReadPositiveDecimal(
             "NETCAFE_HOURLY_RATE");
+        int passwordHashIterations = ReadOptionalInteger(
+            "NETCAFE_PBKDF2_ITERATIONS",
+            Pbkdf2PasswordHasher.DefaultIterations,
+            Pbkdf2PasswordHasher.MinimumAcceptedIterations,
+            Pbkdf2PasswordHasher.MaximumAcceptedIterations);
 
         try
         {
@@ -35,7 +41,8 @@ internal static class Program
                 AuthenticationSetup.CreateServicesForSqlServer(
                     connectionString,
                     codeSender,
-                    otpHashSecret);
+                    otpHashSecret,
+                    passwordHashIterations: passwordHashIterations);
             var handshakes = new MachineHandshakeService(
                 connectionString,
                 EnvironmentMachineKeyProvider.Create());
@@ -131,6 +138,29 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 $"{variableName} phải là số dương theo định dạng invariant.");
+        }
+
+        return value;
+    }
+
+    private static int ReadOptionalInteger(
+        string variableName,
+        int fallback,
+        int minimum,
+        int maximum)
+    {
+        string? raw = Environment.GetEnvironmentVariable(variableName);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        if (!int.TryParse(raw, out int value) ||
+            value < minimum ||
+            value > maximum)
+        {
+            throw new InvalidOperationException(
+                $"{variableName} phải nằm trong khoảng {minimum}-{maximum}.");
         }
 
         return value;

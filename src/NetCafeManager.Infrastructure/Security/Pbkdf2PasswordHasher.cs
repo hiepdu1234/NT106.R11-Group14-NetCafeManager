@@ -7,13 +7,27 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
 {
     public const string AlgorithmName = "PBKDF2-HMAC-SHA256";
 
-    // 100.000 vòng phù hợp cho bản demo học thuật. Khi triển khai thực tế,
-    // cần đo hiệu năng trên máy chủ và tăng số vòng theo chính sách bảo mật.
-    public const int DefaultIterations = 100_000;
+    public const int DefaultIterations = 600_000;
+    public const int MinimumAcceptedIterations = 100_000;
+    public const int MaximumAcceptedIterations = 10_000_000;
 
     private const int SaltSizeInBytes = 32;
     private const int HashSizeInBytes = 32;
-    private const int MaximumAcceptedIterations = 10_000_000;
+
+    private readonly int _iterations;
+
+    public Pbkdf2PasswordHasher(int iterations = DefaultIterations)
+    {
+        if (iterations < MinimumAcceptedIterations ||
+            iterations > MaximumAcceptedIterations)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(iterations),
+                $"Số vòng PBKDF2 phải nằm trong khoảng {MinimumAcceptedIterations:N0}-{MaximumAcceptedIterations:N0}.");
+        }
+
+        _iterations = iterations;
+    }
 
     public PasswordHash HashPassword(string password)
     {
@@ -23,13 +37,13 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
             password,
             salt,
-            DefaultIterations,
+            _iterations,
             HashAlgorithmName.SHA256,
             HashSizeInBytes);
 
         return new PasswordHash(
             AlgorithmName,
-            DefaultIterations,
+            _iterations,
             Convert.ToBase64String(salt),
             Convert.ToBase64String(hash));
     }
@@ -40,7 +54,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         ArgumentNullException.ThrowIfNull(storedHash);
 
         if (!string.Equals(storedHash.Algorithm, AlgorithmName, StringComparison.Ordinal) ||
-            storedHash.Iterations <= 0 ||
+            storedHash.Iterations < MinimumAcceptedIterations ||
             storedHash.Iterations > MaximumAcceptedIterations)
         {
             return false;
@@ -72,4 +86,17 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
             return false;
         }
     }
+
+    public bool NeedsRehash(PasswordHash storedHash)
+    {
+        ArgumentNullException.ThrowIfNull(storedHash);
+
+        return !string.Equals(
+                   storedHash.Algorithm,
+                   AlgorithmName,
+                   StringComparison.Ordinal) ||
+               storedHash.Iterations < _iterations ||
+               storedHash.Iterations > MaximumAcceptedIterations;
+    }
+
 }

@@ -11,9 +11,10 @@
 
 ## Cấu hình PBKDF2
 
-Đồ án dùng 100.000 vòng lặp cho bản demo học thuật. Khi triển khai thực tế,
-cần đo thời gian băm trên máy chủ và tăng số vòng phù hợp với cấu hình phần
-cứng và chính sách bảo mật tại thời điểm triển khai.
+Mặc định Server dùng 600.000 vòng lặp cho PBKDF2-HMAC-SHA256. Có thể thay đổi
+bằng biến môi trường `NETCAFE_PBKDF2_ITERATIONS` trong khoảng 100.000 đến
+10.000.000 sau khi đo thời gian băm trên máy chủ. Tài khoản cũ dùng 100.000
+vòng vẫn đăng nhập được và được nâng cấp tự động sau lần đăng nhập thành công.
 
 Mật khẩu gốc không được ghi vào log, không lưu trong cơ sở dữ liệu và không
 gửi lại cho Client. Chỉ lưu `Algorithm`, `Iterations`, `SaltBase64` và
@@ -21,7 +22,8 @@ gửi lại cho Client. Chỉ lưu `Algorithm`, `Iterations`, `SaltBase64` và
 
 ## Lưu ý khi tích hợp mạng và cơ sở dữ liệu
 
-- Thay `InMemoryUserAccountRepository` bằng repository sử dụng SQL Server.
+- Server chính sử dụng `SqlServerUserAccountRepository`; repository in-memory
+  chỉ dành cho kiểm thử.
 - Chỉ truyền thông tin đăng nhập qua kênh đã mã hóa bằng TLS/SslStream.
 - Không ghi session token hoặc mật khẩu vào log.
 - Khi Server khởi động lại, session trong bộ nhớ sẽ mất. Có thể bổ sung cơ chế

@@ -24,13 +24,21 @@ var options = new DbContextOptionsBuilder<NetCafeDbContext>()
     .UseSqlServer(connectionString)
     .Options;
 var hasher = new Pbkdf2PasswordHasher();
+var legacyHasher = new Pbkdf2PasswordHasher(
+    Pbkdf2PasswordHasher.MinimumAcceptedIterations);
 string originalPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 string newClientPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 string suffix = Guid.NewGuid().ToString("N");
 var admin = NewAccount("admin", UserRole.Administrator, true, 0m);
 var client = NewAccount("client", UserRole.Client, true, 25000m);
 var inactive = NewAccount("inactive", UserRole.Client, false, 0m);
-var accounts = new[] { admin, client, inactive };
+var legacy = NewAccount(
+    "legacy",
+    UserRole.Client,
+    true,
+    10_000m,
+    legacyHasher);
+var accounts = new[] { admin, client, inactive, legacy };
 var clock = new TestClock();
 var sender = new CapturingCodeSender();
 byte[] otpHashSecret = RandomNumberGenerator.GetBytes(32);
@@ -72,6 +80,20 @@ try
         "Client login, role and balance mapping");
     string clientToken = clientLogin.SessionToken
         ?? throw new InvalidOperationException("Missing client session.");
+
+    LoginResponse legacyLogin = await auth.LoginAsync(
+        new LoginRequest(legacy.Username, originalPassword));
+    Require(legacyLogin.IsSuccess, "Legacy PBKDF2 account can log in");
+    await using (var verificationDb = new NetCafeDbContext(options))
+    {
+        int upgradedIterations = await verificationDb.Accounts
+            .Where(account => account.Id == legacy.Id)
+            .Select(account => account.PasswordIterations)
+            .SingleAsync();
+        Require(
+            upgradedIterations == Pbkdf2PasswordHasher.DefaultIterations,
+            "Legacy PBKDF2 hash is upgraded after login");
+    }
 
     await RequireDenied(new LoginRequest(client.Username, originalPassword + "-wrong"), "Wrong password");
     await RequireDenied(new LoginRequest(inactive.Username, originalPassword), "Inactive account");
@@ -169,10 +191,15 @@ finally
 
 Console.WriteLine("SQL Server authentication and OTP smoke test passed.");
 
-Account NewAccount(string prefix, UserRole role, bool isActive, decimal balance)
+Account NewAccount(
+    string prefix,
+    UserRole role,
+    bool isActive,
+    decimal balance,
+    Pbkdf2PasswordHasher? passwordHasher = null)
 {
     string username = $"{prefix}-{suffix}";
-    PasswordHash hash = hasher.HashPassword(originalPassword);
+    PasswordHash hash = (passwordHasher ?? hasher).HashPassword(originalPassword);
     return new Account
     {
         Id = Guid.NewGuid(),

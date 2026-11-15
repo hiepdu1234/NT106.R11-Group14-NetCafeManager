@@ -68,4 +68,30 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
                 row.PasswordHashBase64)
         };
     }
+
+    public async Task<bool> UpdatePasswordHashAsync(
+        Guid accountId,
+        PasswordHash passwordHash,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(passwordHash);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await using var db = new NetCafeDbContext(_options);
+        Account? row = await db.Accounts.SingleOrDefaultAsync(
+            account => account.Id == accountId,
+            cancellationToken);
+        if (row is null)
+        {
+            return false;
+        }
+
+        row.PasswordAlgorithm = passwordHash.Algorithm;
+        row.PasswordIterations = passwordHash.Iterations;
+        row.PasswordSaltBase64 = passwordHash.SaltBase64;
+        row.PasswordHashBase64 = passwordHash.HashBase64;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
 }

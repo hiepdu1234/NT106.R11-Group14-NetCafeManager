@@ -11,12 +11,13 @@ public static class AuthenticationSetup
     // Giữ API cũ cho các nơi chỉ cần đăng nhập/đăng xuất.
     public static AuthenticationService CreateForSqlServer(
         string connectionString,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int passwordHashIterations = Pbkdf2PasswordHasher.DefaultIterations)
     {
         var sessions = new SessionManager();
         return new AuthenticationService(
             new SqlServerUserAccountRepository(connectionString),
-            new Pbkdf2PasswordHasher(),
+            new Pbkdf2PasswordHasher(passwordHashIterations),
             sessions,
             timeProvider);
     }
@@ -27,14 +28,15 @@ public static class AuthenticationSetup
         string connectionString,
         IPasswordResetCodeSender codeSender,
         byte[] otpHashSecret,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int passwordHashIterations = Pbkdf2PasswordHasher.DefaultIterations)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(codeSender);
         ArgumentNullException.ThrowIfNull(otpHashSecret);
 
         var sessions = new SessionManager();
-        var passwordHasher = new Pbkdf2PasswordHasher();
+        var passwordHasher = new Pbkdf2PasswordHasher(passwordHashIterations);
         var authentication = new AuthenticationService(
             new SqlServerUserAccountRepository(connectionString),
             passwordHasher,

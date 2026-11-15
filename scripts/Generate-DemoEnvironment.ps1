@@ -34,6 +34,7 @@ Write-Host ""
 Write-Host ('$env:NETCAFE_OTP_HASH_SECRET_BASE64 = ''{0}''' -f $otpSecret)
 Write-Host ('$env:NETCAFE_MACHINE_KEYS_JSON = ''{0}''' -f $machineKeysJson)
 Write-Host ('$env:NETCAFE_HOURLY_RATE = ''{0}''' -f $HourlyRate)
+Write-Host '$env:NETCAFE_PBKDF2_ITERATIONS = ''600000'''
 Write-Host '$env:NETCAFE_DB_CONNECTION = ''Server=localhost;Database=NetCafeManager;Trusted_Connection=True;TrustServerCertificate=True;'''
 Write-Host '$env:NETCAFE_SMTP_HOST = ''smtp.example.com'''
 Write-Host '$env:NETCAFE_SMTP_PORT = ''587'''
