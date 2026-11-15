@@ -12,17 +12,12 @@ using NetCafeManager.Shared.Sessions;
 namespace NetCafeManager.Client;
 
 /// <summary>
-/// Giao dien Client ghep voi giao thuc handshake, dang nhap va phien tu main.
-/// Bao gom cac man hinh dang nhap, quen mat khau, OTP, dat lai mat khau.
-/// Chua tach thanh cac UserControl theo kien truc muc tieu cua nhom.
-/// Chi thu tren localhost voi du lieu gia cho toi khi he thong co TLS.
+/// Giao diện desktop dùng chung cho máy khách và máy quản trị.
+/// Server xác thực tài khoản và trả vai trò; ứng dụng chỉ định tuyến
+/// đến giao diện tương ứng, không cho người dùng tự chọn quyền.
 /// </summary>
 public sealed class MainForm : Form
 {
-    private const string ServerIp = "127.0.0.1";
-    private const int ServerPort = 5050;
-    private const string DemoMachineId = "MAY-01";
-
     // Bang mau thong nhat theo Muc 1 cua tai lieu thiet ke.
     // Khi tach thanh nhieu Form/UserControl, nen chuyen sang AppTheme dung chung.
     private static class Theme
@@ -58,10 +53,27 @@ public sealed class MainForm : Form
         TextAlign = ContentAlignment.MiddleLeft,
         AutoEllipsis = true,
         AccessibleName = "Thông báo trạng thái",
-        Text = "Chế độ phát triển: chỉ thử bằng dữ liệu giả trên localhost."
+        Text = "Hãy thiết lập thiết bị và kết nối tới Server."
+    };
+    private readonly Label _deviceBadge = new()
+    {
+        Dock = DockStyle.Fill,
+        TextAlign = ContentAlignment.MiddleRight,
+        ForeColor = Theme.Cyan,
+        Font = new Font("Segoe UI", 9, FontStyle.Bold),
+        AccessibleName = "Thông tin thiết bị"
     };
 
-    // Giu nguyen giao thuc xac thuc may va phien dang dung tren main.
+    private DesktopSettings _settings = DesktopSettings.Load();
+    private readonly TextBox _serverHost = NewTextBox("Địa chỉ Server");
+    private readonly TextBox _serverPort = NewTextBox("Cổng Server");
+    private readonly ComboBox _deviceMode = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        AccessibleName = "Loại thiết bị",
+        Font = new Font("Segoe UI", 11),
+        Margin = new Padding(0, 5, 0, 13)
+    };
     private readonly TextBox _machineName = NewTextBox("Tên máy");
     private readonly TextBox _machineKey = NewTextBox("Khóa máy Base64", isPassword: true);
     private readonly Label _machineStatus = Hint("Máy chưa được xác thực.");
@@ -79,12 +91,14 @@ public sealed class MainForm : Form
     private readonly TextBox _otp = NewTextBox("Mã OTP gồm 6 chữ số");
     private readonly TextBox _newPassword = NewTextBox("Mật khẩu mới", isPassword: true);
     private readonly TextBox _confirmPassword = NewTextBox("Xác nhận mật khẩu mới", isPassword: true);
+    private readonly Label _clientWelcome = Hint("");
+    private readonly Label _clientSession = Hint("");
+    private readonly Label _adminWelcome = Hint("");
 
     private readonly ErrorProvider _errors = new();
 
     private Button? _handshakeButton;
     private Button? _machineLink;
-    private Button? _endSessionButton;
     private TcpClientAgent? _client;
     private UsageSessionSummary? _activeSession;
     private bool _machineVerified;
@@ -93,6 +107,8 @@ public sealed class MainForm : Form
     private Button? _requestOtpButton;
     private Button? _verifyOtpButton;
     private Button? _resetButton;
+    private Button? _clientLogoutButton;
+    private Button? _adminLogoutButton;
     private CheckBox? _showLoginPassword;
     private CheckBox? _showNewPasswords;
     private bool _busy;
@@ -101,7 +117,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "NetCafeManager | Đăng nhập máy trạm";
+        Text = "NetCafeManager | Đăng nhập";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
         MinimumSize = new Size(840, 660);
@@ -117,16 +133,42 @@ public sealed class MainForm : Form
             _errors.Dispose();
         };
 
-        _machineName.Text = DemoMachineId;
+        _serverHost.Text = _settings.ServerHost;
+        _serverPort.Text = _settings.ServerPort.ToString();
+        _machineName.Text = _settings.MachineName;
+        _machineKey.Text = _settings.TryUnprotectMachineKey() ?? string.Empty;
+        _deviceMode.Items.AddRange([
+            WorkstationMode.Client,
+            WorkstationMode.Administration
+        ]);
+        _deviceMode.SelectedItem = _settings.Mode;
+        _deviceMode.Format += (_, e) =>
+        {
+            e.Value = e.ListItem is WorkstationMode.Administration
+                ? "Máy quản trị"
+                : "Máy khách";
+        };
         _recoveryRole.Items.AddRange([UserRole.Client, UserRole.Administrator]);
         _recoveryRole.SelectedItem = UserRole.Client;
         _recoveryRole.SelectedIndexChanged += (_, _) => InvalidateRecovery();
         _machineName.TextChanged += (_, _) =>
         {
+            UpdateDeviceBadge();
             if (_machineVerified || _authenticated)
             {
                 ResetConnection();
                 SetStatus("Tên máy đã đổi. Hãy xác thực máy lại.");
+            }
+        };
+        _serverHost.TextChanged += (_, _) => InvalidateConnectionSettings();
+        _serverPort.TextChanged += (_, _) => InvalidateConnectionSettings();
+        _deviceMode.SelectedIndexChanged += (_, _) =>
+        {
+            UpdateDeviceBadge();
+            if (_authenticated)
+            {
+                ResetConnection();
+                ShowPage("login");
             }
         };
 
@@ -136,6 +178,8 @@ public sealed class MainForm : Form
         _loginPassword.MaxLength = 128;
         _machineName.MaxLength = 50;
         _machineKey.MaxLength = 512;
+        _serverHost.MaxLength = 253;
+        _serverPort.MaxLength = 5;
 
         // Neu nguoi dung sua tai khoan trong khi dang khoi phuc,
         // phai xac minh OTP lai; khong giu trang thai cu.
@@ -143,6 +187,7 @@ public sealed class MainForm : Form
 
         BuildLayout();
         BuildPages();
+        UpdateDeviceBadge();
         ShowPage("login");
         Shown += (_, _) => _loginUsername.Focus();
     }
@@ -202,25 +247,16 @@ public sealed class MainForm : Form
         };
         var subtitle = new Label
         {
-            Text = "Đăng nhập và khôi phục mật khẩu máy trạm",
+            Text = "Đăng nhập chung cho khách hàng và quản trị viên",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(203, 213, 225),
             Font = new Font("Segoe UI", 10)
         };
-        var machine = new Label
-        {
-            Text = $"MÃ MÁY  {DemoMachineId}\nBẢN DEMO LOCALHOST",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleRight,
-            ForeColor = Theme.Cyan,
-            Font = new Font("Segoe UI", 9, FontStyle.Bold),
-            AccessibleName = $"Mã máy thử nghiệm {DemoMachineId}"
-        };
         header.Controls.Add(brand, 0, 0);
         header.Controls.Add(subtitle, 0, 1);
-        header.Controls.Add(machine, 1, 0);
-        header.SetRowSpan(machine, 2);
+        header.Controls.Add(_deviceBadge, 1, 0);
+        header.SetRowSpan(_deviceBadge, 2);
         root.Controls.Add(header, 0, 0);
 
         var center = new TableLayoutPanel
@@ -260,44 +296,65 @@ public sealed class MainForm : Form
 
     private void BuildPages()
     {
-        // Man hinh 0: thiet lap/xac thuc may (dung giao thuc tren main).
+        // Thiết lập loại thiết bị chỉ quyết định trải nghiệm cục bộ.
+        // Vai trò và quyền luôn do Server trả về sau khi xác thực tài khoản.
         TableLayoutPanel machine = NewPage(
-            "XÁC THỰC MÁY TRẠM", "Bước thiết lập bắt buộc trước khi đăng nhập.");
+            "THIẾT LẬP THIẾT BỊ", "Cấu hình kết nối và xác thực thiết bị với Server.");
+        AddField(machine, "Loại thiết bị", _deviceMode);
+        AddField(machine, "Địa chỉ Server", _serverHost);
+        AddField(machine, "Cổng Server", _serverPort);
         AddField(machine, "Tên máy", _machineName);
         AddField(machine, "Khóa máy Base64", _machineKey);
         AddItem(machine, Hint(
-            "Dùng khóa máy thử nghiệm đã cấp qua cấu hình demo. Không lưu khóa vào mã nguồn."));
-        _handshakeButton = NewButton("Kết nối và xác thực máy", isPrimary: true);
+            "Khóa máy được mã hóa bằng Windows DPAPI trước khi lưu trên thiết bị này."));
+        _handshakeButton = NewButton("Lưu cấu hình và xác thực thiết bị", isPrimary: true);
         _handshakeButton.Click += async (_, _) => await ExecuteAsync(HandshakeAsync);
         AddItem(machine, _handshakeButton);
         AddItem(machine, _machineStatus);
         AddBackButton(machine, "login");
         RegisterPage("machine", machine);
 
-        // Man hinh 1: dang nhap; giu session Client tren cung ket noi TCP.
+        // Màn hình đăng nhập chung. Người dùng không tự chọn vai trò.
         TableLayoutPanel login = NewPage(
-            "ĐĂNG NHẬP", "Đăng nhập tài khoản người chơi để tiếp tục.");
-        _machineLink = NewButton("Cấu hình / xác thực máy trạm");
+            "ĐĂNG NHẬP", "Server sẽ xác định vai trò và mở giao diện phù hợp.");
+        _machineLink = NewButton("Thiết lập / xác thực thiết bị");
         _machineLink.Click += (_, _) => ShowPage("machine");
         AddItem(login, _machineLink);
-        AddItem(login, Hint("Cần xác thực máy trước khi đăng nhập hoặc mở phiên."));
+        AddItem(login, Hint("Thiết bị phải được xác thực trước khi đăng nhập."));
         AddField(login, "Tên đăng nhập", _loginUsername);
         AddField(login, "Mật khẩu", _loginPassword);
         _showLoginPassword = NewCheckBox("Hiện mật khẩu");
         _showLoginPassword.CheckedChanged += (_, _) =>
             _loginPassword.UseSystemPasswordChar = !_showLoginPassword.Checked;
         AddItem(login, _showLoginPassword);
-        _loginButton = NewButton("Đăng nhập và mở phiên", isPrimary: true);
+        _loginButton = NewButton("Đăng nhập", isPrimary: true);
         _loginButton.Click += async (_, _) => await ExecuteAsync(LoginAsync);
         AddItem(login, _loginButton);
-        _endSessionButton = NewButton("Kết thúc phiên và đăng xuất");
-        _endSessionButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
-        AddItem(login, _endSessionButton);
         Button forgotLink = NewButton("Quên mật khẩu?");
         forgotLink.Click += (_, _) => ShowPage("forgot");
         AddItem(login, forgotLink);
-        AddItem(login, Hint("Chỉ thử trên localhost bằng thông tin giả khi chưa có TLS."));
         RegisterPage("login", login);
+
+        TableLayoutPanel clientDashboard = NewPage(
+            "GIAO DIỆN KHÁCH HÀNG", "Phiên sử dụng được tính và lưu trên Server.");
+        AddItem(clientDashboard, _clientWelcome);
+        AddItem(clientDashboard, _clientSession);
+        AddItem(clientDashboard, Hint(
+            "Các chức năng số dư, gói giờ, lịch sử và dịch vụ sẽ được tích hợp vào khu vực này."));
+        _clientLogoutButton = NewButton("Kết thúc phiên và đăng xuất", isPrimary: true);
+        _clientLogoutButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
+        AddItem(clientDashboard, _clientLogoutButton);
+        RegisterPage("client-dashboard", clientDashboard);
+
+        TableLayoutPanel adminDashboard = NewPage(
+            "QUẢN TRỊ MÁY CHỦ", "Mọi thao tác quản trị vẫn được Server kiểm tra quyền.");
+        AddItem(adminDashboard, _adminWelcome);
+        AddItem(adminDashboard, Hint(
+            "Khu vực quản lý tài khoản, máy trạm, số dư, hóa đơn và tồn kho sẽ được tích hợp tại đây."));
+        _adminLogoutButton = NewButton("Đăng xuất", isPrimary: true);
+        _adminLogoutButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
+        AddItem(adminDashboard, _adminLogoutButton);
+        RegisterPage("admin-dashboard", adminDashboard);
 
         // Man hinh 2: Yeu cau OTP.
         TableLayoutPanel forgot = NewPage(
@@ -495,6 +552,8 @@ public sealed class MainForm : Form
         {
             "machine" => _handshakeButton,
             "login" => _loginButton,
+            "client-dashboard" => _clientLogoutButton,
+            "admin-dashboard" => _adminLogoutButton,
             "forgot" => _requestOtpButton,
             "otp" => _verifyOtpButton,
             "reset" => _resetButton,
@@ -511,7 +570,7 @@ public sealed class MainForm : Form
                 "forgot" => _identifier,
                 "otp" => _otp,
                 "reset" => _newPassword,
-                _ => _loginUsername
+                _ => _pageHost
             };
             focus.Focus();
         }
@@ -523,8 +582,10 @@ public sealed class MainForm : Form
             button.Enabled = !_busy;
         if (_resetButton is not null)
             _resetButton.Enabled = !_busy && _recoveryStage == RecoveryStage.OtpVerified;
-        if (_endSessionButton is not null)
-            _endSessionButton.Enabled = !_busy && _authenticated;
+        if (_clientLogoutButton is not null)
+            _clientLogoutButton.Enabled = !_busy && _authenticated;
+        if (_adminLogoutButton is not null)
+            _adminLogoutButton.Enabled = !_busy && _authenticated;
         if (_machineLink is not null)
             _machineLink.Enabled = !_busy && !_authenticated;
         if (_handshakeButton is not null)
@@ -540,6 +601,30 @@ public sealed class MainForm : Form
         _newPassword.Clear();
         _confirmPassword.Clear();
         UpdateButtonStates();
+    }
+
+    private void InvalidateConnectionSettings()
+    {
+        if (!_machineVerified && !_authenticated)
+        {
+            return;
+        }
+
+        ResetConnection();
+        ShowPage("login");
+        SetStatus("Cấu hình Server đã thay đổi. Hãy xác thực thiết bị lại.");
+    }
+
+    private void UpdateDeviceBadge()
+    {
+        string mode = SelectedMode() == WorkstationMode.Administration
+            ? "MÁY QUẢN TRỊ"
+            : "MÁY KHÁCH";
+        string machineName = string.IsNullOrWhiteSpace(_machineName.Text)
+            ? "CHƯA ĐẶT TÊN"
+            : _machineName.Text.Trim();
+        _deviceBadge.Text = $"{mode}\n{machineName}";
+        _deviceBadge.AccessibleName = $"{mode}, {machineName}";
     }
 
     private async Task ExecuteAsync(Func<Task> action)
@@ -560,7 +645,9 @@ public sealed class MainForm : Form
         catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
         {
             ResetConnection();
-            SetStatus("Không kết nối được tới Server tại localhost:5050.", error: true);
+            SetStatus(
+                $"Không kết nối được tới Server tại {_serverHost.Text.Trim()}:{_serverPort.Text.Trim()}.",
+                error: true);
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
@@ -593,10 +680,17 @@ public sealed class MainForm : Form
     private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
         if (_client is not null) return;
+        string host = _serverHost.Text.Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new InvalidOperationException("Vui lòng nhập địa chỉ Server.");
+        }
+
+        int port = ReadServerPort();
         var client = new TcpClientAgent();
         try
         {
-            await client.ConnectAsync(ServerIp, ServerPort, cancellationToken);
+            await client.ConnectAsync(host, port, cancellationToken);
             _client = client;
         }
         catch
@@ -658,8 +752,27 @@ public sealed class MainForm : Form
     private UserRole SelectedRole() =>
         _recoveryRole.SelectedItem is UserRole role ? role : UserRole.Client;
 
+    private WorkstationMode SelectedMode() =>
+        _deviceMode.SelectedItem is WorkstationMode mode
+            ? mode
+            : WorkstationMode.Client;
+
+    private int ReadServerPort()
+    {
+        if (!int.TryParse(_serverPort.Text.Trim(), out int port) ||
+            port is < 1 or > 65535)
+        {
+            throw new InvalidOperationException(
+                "Cổng Server phải là số trong khoảng 1-65535.");
+        }
+
+        return port;
+    }
+
     private async Task HandshakeAsync()
     {
+        if (!Require(_serverHost, "Vui lòng nhập địa chỉ Server.")) return;
+        int serverPort = ReadServerPort();
         if (!Require(_machineName, "Vui lòng nhập tên máy.")) return;
         if (!Require(_machineKey, "Vui lòng nhập khóa máy Base64.")) return;
 
@@ -705,6 +818,14 @@ public sealed class MainForm : Form
 
             _machineVerified = true;
             _machineStatus.Text = $"Đã xác thực: {completed.Value.MachineName}";
+            _settings = DesktopSettings.Create(
+                _serverHost.Text,
+                serverPort,
+                SelectedMode(),
+                completed.Value.MachineName,
+                _machineKey.Text);
+            _settings.Save();
+            UpdateDeviceBadge();
             ShowPage("login");
             SetStatus($"Máy {completed.Value.MachineName} đã xác thực. Có thể đăng nhập.", success: true);
         }
@@ -716,7 +837,6 @@ public sealed class MainForm : Form
         finally
         {
             CryptographicOperations.ZeroMemory(machineKey);
-            _machineKey.Clear();
         }
     }
 
@@ -739,6 +859,10 @@ public sealed class MainForm : Form
         // Server huy session token theo context va tra COMMAND_RESULT.
         await SendAsync(NetworkMessageTypes.AuthLogout, new { }, timeout.Token);
         _authenticated = false;
+        _clientWelcome.Text = string.Empty;
+        _clientSession.Text = string.Empty;
+        _adminWelcome.Text = string.Empty;
+        ShowPage("login");
         UpdateButtonStates();
         SetStatus("Đã kết thúc phiên và đăng xuất.", success: true);
     }
@@ -800,6 +924,21 @@ public sealed class MainForm : Form
                 return;
             }
 
+            bool modeMatchesRole =
+                SelectedMode() == WorkstationMode.Client &&
+                result.User.Role == UserRole.Client ||
+                SelectedMode() == WorkstationMode.Administration &&
+                result.User.Role == UserRole.Administrator;
+            if (!modeMatchesRole)
+            {
+                await SendAsync(NetworkMessageTypes.AuthLogout, new { }, timeout.Token);
+                string requiredMode = result.User.Role == UserRole.Administrator
+                    ? "Máy quản trị"
+                    : "Máy khách";
+                throw new InvalidOperationException(
+                    $"Tài khoản này phải đăng nhập trên thiết bị được cấu hình là {requiredMode}.");
+            }
+
             // Phien su dung phai mo tren dung TCP connection vua dang nhap.
             if (result.User.Role == UserRole.Client)
             {
@@ -809,17 +948,24 @@ public sealed class MainForm : Form
                 if (!started.IsSuccess || started.Value is null)
                     throw new InvalidOperationException(started.Message);
                 _activeSession = started.Value;
-                SetStatus($"Đăng nhập thành công: {username}. Phiên #{started.Value.SessionId}; " +
-                    $"số dư {started.Value.RemainingBalance:N0} đồng.", success: true);
+                _clientWelcome.Text =
+                    $"Xin chào {result.User.Username}. Số dư hiện tại: " +
+                    $"{started.Value.RemainingBalance:N0} đồng.";
+                _clientSession.Text =
+                    $"Phiên #{started.Value.SessionId} đã bắt đầu lúc " +
+                    $"{started.Value.StartedAt.ToLocalTime():HH:mm:ss}.";
             }
             else
             {
-                SetStatus($"Đăng nhập thành công: {username} ({result.User.Role}).", success: true);
+                _adminWelcome.Text =
+                    $"Xin chào {result.User.Username}. Bạn đã đăng nhập với quyền quản trị.";
             }
             _authenticated = true;
+            ShowPage(result.User.Role == UserRole.Client
+                ? "client-dashboard"
+                : "admin-dashboard");
             UpdateButtonStates();
-            MessageBox.Show(this, "Đăng nhập thành công.", "NetCafeManager",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus($"Đăng nhập thành công: {username}.", success: true);
         }
         finally
         {

@@ -46,6 +46,16 @@ public sealed class AuthTcpHandler
             return null;
         }
 
+        // Không tin việc Desktop tự báo loại thiết bị. Mọi tài khoản chỉ được
+        // đăng nhập sau khi Server đã hoàn tất challenge-response của máy.
+        if (context.VerifiedMachine is null)
+        {
+            return NetworkResponseFactory.Error(
+                request,
+                "AUTH_MACHINE_REQUIRED",
+                "Thiết bị phải được Server xác thực trước khi đăng nhập.");
+        }
+
         if (context.ActiveUsageSession is not null)
         {
             return NetworkResponseFactory.Error(
@@ -91,7 +101,8 @@ public sealed class AuthTcpHandler
         return NetworkResponseFactory.Result(request, result);
     }
 
-    // Giữ overload cũ cho các bài kiểm tra chỉ kiểm tra AUTH_LOGIN.
+    // Giữ overload tương thích. AUTH_LOGIN qua overload này sẽ bị từ chối
+    // vì không có trạng thái xác thực máy trong TcpConnectionContext.
     public Task<NetworkMessage?> HandleAsync(
         NetworkMessage request,
         CancellationToken cancellationToken = default) =>
