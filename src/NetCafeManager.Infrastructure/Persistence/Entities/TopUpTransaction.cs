@@ -3,6 +3,8 @@ namespace NetCafeManager.Infrastructure.Persistence.Entities;
 public sealed class TopUpTransaction
 {
     public long Id { get; set; }
+    public Guid CommandId { get; set; }
+    public decimal BalanceAfter { get; set; }
     public Guid AccountId { get; set; }
     public int HourPackageId { get; set; }
     public decimal Amount { get; set; }

@@ -12,6 +12,7 @@ public sealed class ProductInventoryService
 {
     private const int MaxNameLength = 100;
     private const int MaxUnitLength = 20;
+    private const decimal MaxMoney = 9_999_999_999.99m;
 
     private readonly DbContextOptions<NetCafeDbContext> _options;
 
@@ -255,7 +256,7 @@ public sealed class ProductInventoryService
             return "Loại chỉ có thể là sản phẩm hoặc dịch vụ ngủ qua đêm.";
         }
 
-        if (unit?.Length > MaxUnitLength || request.UnitPrice < 0)
+        if (unit?.Length > MaxUnitLength || request.UnitPrice < 0 || request.UnitPrice > MaxMoney)
         {
             return "Đơn vị tính hoặc đơn giá không hợp lệ.";
         }
