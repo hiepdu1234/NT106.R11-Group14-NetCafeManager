@@ -22,6 +22,8 @@ await using (var db = new NetCafeDbContext(options))
     db.Accounts.AddRange(
         NewAccount(adminId, "admin-invoice", "admin-invoice@example.test", nameof(UserRole.Administrator), hash),
         NewAccount(customerId, "client-invoice", "client-invoice@example.test", nameof(UserRole.Client), hash));
+    Account customer = db.Accounts.Local.Single(account => account.Id == customerId);
+    customer.Balance = 100_000m;
     var computer = new Computer { Name = "MAY-INVOICE", Status = "Trong" };
     db.Computers.Add(computer);
     await db.SaveChangesAsync();
@@ -78,6 +80,22 @@ InvoiceResult<InvoiceSummary> paid = await service.SetStatusAsync(
     InvoiceStatuses.Paid);
 Assert(paid.IsSuccess && paid.Value?.Status == InvoiceStatuses.Paid,
     "Phải đánh dấu hóa đơn đã thanh toán.");
+await using (var verifyDb = new NetCafeDbContext(options))
+{
+    decimal balanceAfterPayment = await verifyDb.Accounts
+        .Where(account => account.Id == customerId)
+        .Select(account => account.Balance)
+        .SingleAsync();
+    Assert(balanceAfterPayment == 100_000m - createdInvoice.TotalAmount,
+        "Thanh toán phải trừ đúng số tiền hóa đơn khỏi số dư.");
+}
+
+InvoiceResult<InvoiceSummary> duplicatePayment = await service.SetStatusAsync(
+    administrator,
+    createdInvoice.Id,
+    InvoiceStatuses.Paid);
+Assert(!duplicatePayment.IsSuccess && duplicatePayment.ErrorCode == "INVOICE_ALREADY_PAID",
+    "Không được trừ tiền lần thứ hai khi thanh toán lại hóa đơn.");
 
 Console.WriteLine("Invoice smoke test passed.");
 

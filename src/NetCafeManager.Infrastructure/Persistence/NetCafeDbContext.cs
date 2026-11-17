@@ -361,12 +361,20 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
             {
                 table.HasCheckConstraint("CK_GIAO_DICH_NAP_SoTien", "[SoTien] >= 0");
                 table.HasCheckConstraint("CK_GIAO_DICH_NAP_SoGio", "[SoGioNap] > 0");
+                table.HasCheckConstraint("CK_GIAO_DICH_NAP_SoDuSau", "[SoDuSauGiaoDich] >= 0");
             });
 
             entity.HasKey(transaction => transaction.Id);
             entity.Property(transaction => transaction.Id)
                 .HasColumnName("MaNap")
                 .UseIdentityColumn();
+            entity.Property(transaction => transaction.CommandId)
+                .HasColumnName("CommandId")
+                .ValueGeneratedNever();
+            entity.HasIndex(transaction => transaction.CommandId).IsUnique();
+            entity.Property(transaction => transaction.BalanceAfter)
+                .HasColumnName("SoDuSauGiaoDich")
+                .HasPrecision(12, 2);
             entity.Property(transaction => transaction.AccountId).HasColumnName("MaTK");
             entity.Property(transaction => transaction.HourPackageId).HasColumnName("MaGoi");
             entity.Property(transaction => transaction.Amount)
