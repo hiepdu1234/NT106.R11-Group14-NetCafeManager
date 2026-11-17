@@ -12,6 +12,7 @@ public sealed class TopUpService
 {
     private readonly DbContextOptions<NetCafeDbContext> _options;
     private readonly TimeProvider _timeProvider;
+    private const decimal MaxMoney = 9_999_999_999.99m;
 
     public TopUpService(string connectionString, TimeProvider? timeProvider = null)
     {
@@ -35,11 +36,46 @@ public sealed class TopUpService
                 "Chỉ quản trị viên được cộng tiền vào tài khoản khách hàng.");
         }
 
-        string? note = NormalizeNote(request.Note);
+        if (request.CommandId == Guid.Empty || request.CustomerId == Guid.Empty || request.HourPackageId <= 0)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_INVALID_REQUEST",
+                "Mã yêu cầu, tài khoản khách hàng hoặc gói giờ không hợp lệ.");
+        }
+
+        string? note;
+        try
+        {
+            note = NormalizeNote(request.Note);
+        }
+        catch (ArgumentException)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_INVALID_NOTE",
+                "Ghi chú không được vượt quá 500 ký tự.");
+        }
         await using var db = new NetCafeDbContext(_options);
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
+
+        TopUpTransaction? previous = await db.TopUpTransactions
+            .Include(row => row.HourPackage)
+            .SingleOrDefaultAsync(row => row.CommandId == request.CommandId, cancellationToken);
+        if (previous is not null)
+        {
+            if (previous.AccountId != request.CustomerId || previous.PerformedByAccountId != actor.Id ||
+                previous.HourPackageId != request.HourPackageId)
+            {
+                return BillingResult<TopUpReceipt>.Failure(
+                    "TOPUP_COMMAND_CONFLICT",
+                    "Mã yêu cầu đã được sử dụng cho một giao dịch khác.");
+            }
+
+            return BillingResult<TopUpReceipt>.Success(
+                ToReceipt(previous),
+                "Yêu cầu đã được xử lý trước đó; trả lại kết quả cũ.");
+        }
 
         Account? customer = await db.Accounts.SingleOrDefaultAsync(
             account => account.Id == request.CustomerId &&
@@ -69,6 +105,13 @@ public sealed class TopUpService
                 "Gói giờ không tồn tại hoặc đã ngừng áp dụng.");
         }
 
+        if (package.Hours <= 0 || package.Price <= 0m || package.Price > MaxMoney)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_INVALID_PACKAGE",
+                "Gói giờ phải có số giờ và giá tiền lớn hơn 0, nằm trong giới hạn cho phép.");
+        }
+
         Account? administrator = await db.Accounts.SingleOrDefaultAsync(
             account => account.Id == actor.Id &&
                        account.Role == nameof(UserRole.Administrator) &&
@@ -81,9 +124,30 @@ public sealed class TopUpService
                 "Tài khoản quản trị viên không còn hợp lệ.");
         }
 
-        customer.Balance = checked(customer.Balance + package.Price);
+        decimal newBalance;
+        try
+        {
+            newBalance = checked(customer.Balance + package.Price);
+        }
+        catch (OverflowException)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_BALANCE_OVERFLOW",
+                "Số dư sau khi nạp vượt giới hạn cho phép.");
+        }
+
+        if (newBalance > MaxMoney)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_BALANCE_OVERFLOW",
+                "Số dư sau khi nạp vượt giới hạn cho phép.");
+        }
+
+        customer.Balance = newBalance;
         var topUp = new TopUpTransaction
         {
+            CommandId = request.CommandId,
+            BalanceAfter = newBalance,
             AccountId = customer.Id,
             HourPackageId = package.Id,
             Amount = package.Price,
@@ -93,18 +157,21 @@ public sealed class TopUpService
             Note = note
         };
         db.TopUpTransactions.Add(topUp);
-        await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return BillingResult<TopUpReceipt>.Failure(
+                "TOPUP_SAVE_FAILED",
+                "Không thể ghi nhận giao dịch nạp tiền. Hãy kiểm tra mã yêu cầu và thử lại.");
+        }
 
-        var receipt = new TopUpReceipt(
-            topUp.Id,
-            customer.Id,
-            package.Name,
-            package.Hours,
-            package.Price,
-            customer.Balance,
-            new DateTimeOffset(topUp.CreatedAtUtc, TimeSpan.Zero));
-        return BillingResult<TopUpReceipt>.Success(receipt, "Nạp gói giờ thành công.");
+        return BillingResult<TopUpReceipt>.Success(
+            ToReceipt(topUp),
+            "Nạp gói giờ thành công.");
     }
 
     public async Task<IReadOnlyList<TopUpHistoryItem>> GetHistoryAsync(
@@ -133,6 +200,15 @@ public sealed class TopUpService
                 row.Note))
             .ToListAsync(cancellationToken);
     }
+
+    private static TopUpReceipt ToReceipt(TopUpTransaction transaction) => new(
+        transaction.Id,
+        transaction.AccountId,
+        transaction.HourPackage.Name,
+        transaction.HoursAdded,
+        transaction.Amount,
+        transaction.BalanceAfter,
+        new DateTimeOffset(transaction.CreatedAtUtc, TimeSpan.Zero));
 
     private static string? NormalizeNote(string? note)
     {

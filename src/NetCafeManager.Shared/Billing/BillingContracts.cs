@@ -17,7 +17,8 @@ public sealed record SaveHourPackageRequest(
 public sealed record TopUpRequest(
     Guid CustomerId,
     int HourPackageId,
-    string? Note);
+    string? Note,
+    Guid CommandId);
 
 public sealed record TopUpReceipt(
     long TransactionId,

@@ -32,9 +32,31 @@ IReadOnlyList<HourPackageSummary> activePackages = await packages.ListActiveAsyn
 Assert(activePackages.Count > 0, "Phải có ít nhất một gói giờ đang hoạt động.");
 HourPackageSummary selected = activePackages[0];
 
+int zeroPricePackageId;
+await using (var db = new NetCafeDbContext(options))
+{
+    var zeroPricePackage = new HourPackage
+    {
+        Name = $"Goi mien phi smoke {Guid.NewGuid():N}",
+        Hours = 1,
+        Price = 0m,
+        IsActive = true
+    };
+    db.HourPackages.Add(zeroPricePackage);
+    await db.SaveChangesAsync();
+    zeroPricePackageId = zeroPricePackage.Id;
+}
+
+BillingResult<TopUpReceipt> zeroPriceResult = await topUps.TopUpAsync(
+    administrator,
+    new TopUpRequest(customerId, zeroPricePackageId, "Zero price", Guid.NewGuid()));
+Assert(!zeroPriceResult.IsSuccess && zeroPriceResult.ErrorCode == "TOPUP_INVALID_PACKAGE",
+    "Không được nạp gói có giá bằng 0.");
+
+var topUpRequest = new TopUpRequest(customerId, selected.Id, "Smoke test", Guid.NewGuid());
 BillingResult<TopUpReceipt> receipt = await topUps.TopUpAsync(
     administrator,
-    new TopUpRequest(customerId, selected.Id, "Smoke test"));
+    topUpRequest);
 if (!receipt.IsSuccess || receipt.Value is null)
 {
     throw new InvalidOperationException("Nạp gói giờ phải thành công.");
@@ -43,6 +65,10 @@ if (!receipt.IsSuccess || receipt.Value is null)
 TopUpReceipt topUpReceipt = receipt.Value;
 Assert(topUpReceipt.Amount == selected.Price && topUpReceipt.NewBalance == selected.Price,
     "Số dư phải tăng đúng bằng giá gói.");
+
+BillingResult<TopUpReceipt> repeatedTopUp = await topUps.TopUpAsync(administrator, topUpRequest);
+Assert(repeatedTopUp.IsSuccess && repeatedTopUp.Value?.TransactionId == topUpReceipt.TransactionId,
+    "Gửi lại cùng CommandId phải trả về giao dịch cũ, không cộng tiền lần hai.");
 
 IReadOnlyList<TopUpHistoryItem> history = await topUps.GetHistoryAsync(client, customerId);
 Assert(history.Count == 1 && history[0].TransactionId == topUpReceipt.TransactionId,
