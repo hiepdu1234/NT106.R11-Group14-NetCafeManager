@@ -86,6 +86,7 @@ $values = [ordered]@{
     NETCAFE_OTP_HASH_SECRET_BASE64 = $otpSecret
     NETCAFE_MACHINE_KEYS_JSON = $machineKeysJson
     NETCAFE_HOURLY_RATE = $HourlyRate.ToString([Globalization.CultureInfo]::InvariantCulture)
+    NETCAFE_PBKDF2_ITERATIONS = "600000"
     NETCAFE_TCP_PORT = "5050"
     NETCAFE_SMTP_HOST = $SmtpHost
     NETCAFE_SMTP_PORT = $SmtpPort.ToString()

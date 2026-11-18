@@ -1,3 +1,4 @@
+using NetCafeManager.Shared.Security;
 using System.Collections.Concurrent;
 
 namespace NetCafeManager.Server.Authentication;
@@ -33,4 +34,32 @@ public sealed class InMemoryUserAccountRepository : IUserAccountRepository
         _accounts.TryAdd(NormalizeUsername(account.Username), account);
 
     private static string NormalizeUsername(string username) => username.Trim();
+
+    public Task<bool> UpdatePasswordHashAsync(
+        Guid accountId,
+        PasswordHash passwordHash,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(passwordHash);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        UserAccount? account = _accounts.Values.FirstOrDefault(
+            candidate => candidate.Id == accountId);
+        if (account is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        account.PasswordHash = passwordHash;
+        return Task.FromResult(true);
+    }
+    public Task<bool> TryUpgradePasswordHashAsync(
+            Guid accountId,
+            string oldHash,
+            PasswordHash newPasswordHash,
+            CancellationToken cancellationToken = default)
+    {
+        // Tạm thời chưa cần triển khai cho môi trường Test In-Memory
+        throw new NotImplementedException();
+    }
 }
