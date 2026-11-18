@@ -15,7 +15,7 @@ public sealed class CustomerManagementService
     private const int MinUsernameLength = 3;
     private const int MaxUsernameLength = 50;
     private const int MinPasswordLength = 8;
-    private const int MaxPasswordLength = 128;
+    private const int MaxPasswordLength = 64;
     private const int MaxFullNameLength = 100;
 
     private readonly DbContextOptions<NetCafeDbContext> _options;
@@ -239,7 +239,7 @@ public sealed class CustomerManagementService
 
         if (password.Length is < MinPasswordLength or > MaxPasswordLength)
         {
-            return "Mật khẩu phải từ 8 đến 128 ký tự.";
+            return "Mật khẩu phải từ 8 đến 64 ký tự.";
         }
 
         return null;
@@ -251,7 +251,7 @@ public sealed class CustomerManagementService
         {
             return false;
         }
-
+        
         try
         {
             return string.Equals(new MailAddress(email).Address, email, StringComparison.OrdinalIgnoreCase);

@@ -12,7 +12,7 @@
 
 - Tên đăng nhập dài 3-50 ký tự, không chứa khoảng trắng.
 - Email hợp lệ, không trùng với tài khoản khác.
-- Mật khẩu dài 8-128 ký tự.
+- Mật khẩu dài 8-64 ký tự.
 - Không xóa cứng tài khoản; dùng `IsActive = false` để khóa nhằm giữ lịch sử.
 
 ## Điểm tích hợp

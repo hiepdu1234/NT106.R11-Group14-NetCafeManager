@@ -176,17 +176,21 @@ async Task EnsureDemoComputerAsync(string machineName)
     computer.MaintenanceReason = null;
 }
 
+
 static string RequirePassword(string variableName)
 {
     string password = RequireEnvironment(variableName);
-    if (password.Length is < 8 or > 128 || string.IsNullOrWhiteSpace(password))
+
+    if (string.IsNullOrWhiteSpace(password) ||
+        password.Length is < 8 or > 64)
     {
         throw new InvalidOperationException(
-            $"{variableName} phải có từ 8 đến 128 ký tự.");
+            $"{variableName} phải có từ 8 đến 64 ký tự.");
     }
 
     return password;
 }
+
 
 static void ValidateIdentifier(
     string value,

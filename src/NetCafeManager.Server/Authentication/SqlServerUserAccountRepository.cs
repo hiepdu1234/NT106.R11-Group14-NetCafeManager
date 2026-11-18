@@ -1,3 +1,4 @@
+
 using Microsoft.EntityFrameworkCore;
 using NetCafeManager.Infrastructure.Persistence;
 using NetCafeManager.Infrastructure.Persistence.Entities;
@@ -6,14 +7,17 @@ using NetCafeManager.Shared.Security;
 
 namespace NetCafeManager.Server.Authentication;
 
+/// <summary>
+/// Repository đọc tài khoản và nâng cấp password hash bằng SQL Server.
+/// </summary>
 public sealed class SqlServerUserAccountRepository : IUserAccountRepository
 {
-    private const int MaxUsernameLength = 50;
     private readonly DbContextOptions<NetCafeDbContext> _options;
 
     public SqlServerUserAccountRepository(string connectionString)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
         _options = new DbContextOptionsBuilder<NetCafeDbContext>()
             .UseSqlServer(connectionString)
             .Options;
@@ -23,32 +27,37 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
         string username,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(username);
         cancellationToken.ThrowIfCancellationRequested();
 
-        string lookup = username.Trim();
-        if (lookup.Length is 0 or > MaxUsernameLength)
+        string normalizedUsername = username?.Trim() ?? string.Empty;
+
+        if (normalizedUsername.Length == 0)
         {
             return null;
         }
 
         await using var db = new NetCafeDbContext(_options);
-        Account? row = await db.Accounts
-            .AsNoTracking()
-            .SingleOrDefaultAsync(account => account.Username == lookup, cancellationToken);
 
-        if (row is null)
+        Account? account = await db.Accounts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.Username == normalizedUsername,
+                cancellationToken);
+
+        if (account is null)
         {
             return null;
         }
 
-        UserRole? role = row.Role switch
+        // Chỉ chấp nhận đúng tên Role đã định nghĩa.
+        UserRole? role = account.Role switch
         {
             nameof(UserRole.Administrator) => UserRole.Administrator,
             nameof(UserRole.Client) => UserRole.Client,
             _ => null
         };
 
+        // Không tự động cấp quyền mặc định nếu Role không hợp lệ.
         if (role is null)
         {
             return null;
@@ -56,50 +65,60 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
 
         return new UserAccount
         {
-            Id = row.Id,
-            Username = row.Username,
+            Id = account.Id,
+            Username = account.Username,
             Role = role.Value,
-            IsActive = row.IsActive,
-            Balance = row.Balance,
+
             PasswordHash = new PasswordHash(
-                row.PasswordAlgorithm,
-                row.PasswordIterations,
-                row.PasswordSaltBase64,
-                row.PasswordHashBase64)
+                account.PasswordAlgorithm,
+                account.PasswordIterations,
+                account.PasswordSaltBase64,
+                account.PasswordHashBase64),
+
+            // Phải giữ đầy đủ trạng thái và số dư tài khoản.
+            Balance = account.Balance,
+            IsActive = account.IsActive
         };
     }
 
     public async Task<bool> TryUpgradePasswordHashAsync(
         Guid accountId,
         string oldHash,
-        PasswordHash passwordHash,
+        PasswordHash newPasswordHash,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(passwordHash);
-        ArgumentNullException.ThrowIfNull(oldHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(oldHash);
+        ArgumentNullException.ThrowIfNull(newPasswordHash);
+
         cancellationToken.ThrowIfCancellationRequested();
 
         await using var db = new NetCafeDbContext(_options);
 
-        // Cốt lõi của Optimistic Concurrency: Chỉ tìm Account nếu Hash trong DB 
-        // vẫn khớp đúng với oldHash mà ta truyền vào.
-        Account? row = await db.Accounts.SingleOrDefaultAsync(
-            account => account.Id == accountId && account.PasswordHashBase64 == oldHash,
-            cancellationToken);
+        // Conditional UPDATE:
+        // Chỉ cập nhật khi hash hiện tại vẫn bằng oldHash.
+        int rowsAffected = await db.Accounts
+            .Where(account =>
+                account.Id == accountId &&
+                EF.Functions.Collate(
+                    account.PasswordHashBase64,
+                    "Latin1_General_100_BIN2") == oldHash)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(
+                        account => account.PasswordAlgorithm,
+                        newPasswordHash.Algorithm)
+                    .SetProperty(
+                        account => account.PasswordIterations,
+                        newPasswordHash.Iterations)
+                    .SetProperty(
+                        account => account.PasswordSaltBase64,
+                        newPasswordHash.SaltBase64)
+                    .SetProperty(
+                        account => account.PasswordHashBase64,
+                        newPasswordHash.HashBase64),
+                cancellationToken);
 
-        if (row is null)
-        {
-            // Nếu null, nghĩa là mật khẩu vừa bị ai đó đổi từ nơi khác
-            return false;
-        }
-
-        row.PasswordAlgorithm = passwordHash.Algorithm;
-        row.PasswordIterations = passwordHash.Iterations;
-        row.PasswordSaltBase64 = passwordHash.SaltBase64;
-        row.PasswordHashBase64 = passwordHash.HashBase64;
-
-        await db.SaveChangesAsync(cancellationToken);
-        return true;
+        // Chỉ thành công khi đúng một tài khoản được cập nhật.
+        return rowsAffected == 1;
     }
-
 }
