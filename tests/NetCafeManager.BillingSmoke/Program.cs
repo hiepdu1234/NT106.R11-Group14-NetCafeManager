@@ -70,8 +70,38 @@ BillingResult<TopUpReceipt> repeatedTopUp = await topUps.TopUpAsync(administrato
 Assert(repeatedTopUp.IsSuccess && repeatedTopUp.Value?.TransactionId == topUpReceipt.TransactionId,
     "Gửi lại cùng CommandId phải trả về giao dịch cũ, không cộng tiền lần hai.");
 
+BillingResult<TopUpReceipt> commandConflict = await topUps.TopUpAsync(
+    administrator,
+    new TopUpRequest(customerId, selected.Id, "Different note", topUpRequest.CommandId));
+Assert(!commandConflict.IsSuccess && commandConflict.ErrorCode == "TOPUP_COMMAND_CONFLICT",
+    "Reusing a CommandId with different data must be rejected.");
+
+var concurrentRequest = new TopUpRequest(
+    customerId,
+    selected.Id,
+    "Concurrent retry",
+    Guid.NewGuid());
+Task<BillingResult<TopUpReceipt>> concurrentFirst = topUps.TopUpAsync(
+    administrator,
+    concurrentRequest);
+Task<BillingResult<TopUpReceipt>> concurrentSecond = topUps.TopUpAsync(
+    administrator,
+    concurrentRequest);
+BillingResult<TopUpReceipt>[] concurrentResults = await Task.WhenAll(
+    concurrentFirst,
+    concurrentSecond);
+Assert(concurrentResults.All(result => result.IsSuccess && result.Value is not null),
+    "Concurrent retries must both return a successful result.");
+Assert(concurrentResults[0].Value!.TransactionId ==
+       concurrentResults[1].Value!.TransactionId,
+    "Concurrent retries must return the same transaction.");
+Assert(concurrentResults[0].Value!.NewBalance == selected.Price * 2,
+    "Concurrent retries must add the balance only once.");
+
 IReadOnlyList<TopUpHistoryItem> history = await topUps.GetHistoryAsync(client, customerId);
-Assert(history.Count == 1 && history[0].TransactionId == topUpReceipt.TransactionId,
+Assert(history.Count == 2 &&
+       history.Any(item => item.TransactionId == topUpReceipt.TransactionId) &&
+       history.Any(item => item.TransactionId == concurrentResults[0].Value!.TransactionId),
     "Khách hàng phải xem được lịch sử nạp của chính mình.");
 
 BalanceWarningState warning = BalanceWarningEvaluator.Evaluate(2_000m, 10_000m);

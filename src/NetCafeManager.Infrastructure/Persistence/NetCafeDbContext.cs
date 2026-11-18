@@ -288,7 +288,7 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
                 table.HasCheckConstraint("CK_HOA_DON_TongTien", "[TongTien] >= 0");
                 table.HasCheckConstraint(
                     "CK_HOA_DON_TrangThai",
-                    "[TrangThai] IN (N'ChuaThanhToan', N'DaThanhToan', N'CongNo')");
+                    "[TrangThai] IN (N'ChuaThanhToan', N'DaThanhToan')");
             });
 
             entity.HasKey(invoice => invoice.Id);

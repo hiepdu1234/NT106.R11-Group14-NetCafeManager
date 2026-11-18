@@ -4,7 +4,6 @@ public static class InvoiceStatuses
 {
     public const string Unpaid = "ChuaThanhToan";
     public const string Paid = "DaThanhToan";
-    public const string Debt = "CongNo";
 }
 
 public sealed record CreateInvoiceRequest(

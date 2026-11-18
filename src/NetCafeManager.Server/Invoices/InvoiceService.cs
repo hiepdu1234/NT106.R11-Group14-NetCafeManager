@@ -43,6 +43,13 @@ public sealed class InvoiceService
                 "Mã phiên hoặc số tiền giảm giá không hợp lệ.");
         }
 
+        if (request.Discount != 0m)
+        {
+            return InvoiceResult<InvoiceSummary>.Failure(
+                "INVOICE_DISCOUNT_NOT_SUPPORTED",
+                "Giảm giá chưa được hỗ trợ cho đến khi được tích hợp vào transaction tính tiền.");
+        }
+
         await using var db = new NetCafeDbContext(_options);
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
@@ -99,20 +106,14 @@ public sealed class InvoiceService
                 "INVOICE_INVALID_AMOUNT",
                 "Dữ liệu tiền giờ hoặc tiền dịch vụ không hợp lệ.");
         }
-        if (request.Discount > subtotal)
-        {
-            return InvoiceResult<InvoiceSummary>.Failure(
-                "INVOICE_DISCOUNT_TOO_LARGE",
-                "Giảm giá không được lớn hơn tổng tiền giờ và dịch vụ.");
-        }
 
         var invoice = new Invoice
         {
             UsageSessionId = session.Id,
             UsageCost = session.UsageCost,
             ServiceCost = serviceCost,
-            Discount = request.Discount,
-            TotalAmount = subtotal - request.Discount,
+            Discount = 0m,
+            TotalAmount = subtotal,
             CreatedAtUtc = _timeProvider.GetUtcNow().UtcDateTime,
             Status = InvoiceStatuses.Unpaid
         };
@@ -135,24 +136,21 @@ public sealed class InvoiceService
         {
             return InvoiceResult<InvoiceSummary>.Failure(
                 "INVOICE_FORBIDDEN",
-                "Chỉ quản trị viên được cập nhật trạng thái hóa đơn.");
+                "Chỉ quản trị viên được xác nhận hóa đơn.");
         }
 
-        if (invoiceId <= 0 || status is not (InvoiceStatuses.Paid or InvoiceStatuses.Debt))
+        if (invoiceId <= 0 || status != InvoiceStatuses.Paid)
         {
             return InvoiceResult<InvoiceSummary>.Failure(
                 "INVOICE_INVALID_STATUS",
-                "Mã hóa đơn hoặc trạng thái mới không hợp lệ.");
+                "Hóa đơn chỉ có thể chuyển sang trạng thái đã thanh toán.");
         }
 
         await using var db = new NetCafeDbContext(_options);
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable,
+        Invoice? invoice = await db.Invoices.SingleOrDefaultAsync(
+            row => row.Id == invoiceId,
             cancellationToken);
 
-        Invoice? invoice = await db.Invoices
-            .Include(row => row.UsageSession)
-            .SingleOrDefaultAsync(row => row.Id == invoiceId, cancellationToken);
         if (invoice is null)
         {
             return InvoiceResult<InvoiceSummary>.Failure(
@@ -162,59 +160,24 @@ public sealed class InvoiceService
 
         if (invoice.Status == InvoiceStatuses.Paid)
         {
-            return InvoiceResult<InvoiceSummary>.Failure(
-                "INVOICE_ALREADY_PAID",
-                "Hóa đơn đã thanh toán; không thể trừ tiền lần nữa.");
+            return InvoiceResult<InvoiceSummary>.Success(
+                ToSummary(invoice),
+                "Hóa đơn đã được xác nhận thanh toán trước đó.");
         }
 
-        if (status == InvoiceStatuses.Paid)
+        if (invoice.Status != InvoiceStatuses.Unpaid)
         {
-            if (invoice.TotalAmount < 0m || invoice.TotalAmount > MaxMoney)
-            {
-                return InvoiceResult<InvoiceSummary>.Failure(
-                    "INVOICE_INVALID_AMOUNT",
-                    "Tổng tiền hóa đơn không hợp lệ.");
-            }
-
-            int affectedAccounts = await db.Accounts
-                .Where(account => account.Id == invoice.UsageSession.AccountId &&
-                                  account.Role == nameof(UserRole.Client) &&
-                                  account.IsActive &&
-                                  account.Balance >= invoice.TotalAmount)
-                .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(
-                        account => account.Balance,
-                        account => account.Balance - invoice.TotalAmount),
-                    cancellationToken);
-
-            if (affectedAccounts == 0)
-            {
-                Account? customer = await db.Accounts
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(
-                        account => account.Id == invoice.UsageSession.AccountId,
-                        cancellationToken);
-
-                string errorCode = customer is null || !customer.IsActive ||
-                                   customer.Role != nameof(UserRole.Client)
-                    ? "INVOICE_CUSTOMER_UNAVAILABLE"
-                    : "INVOICE_INSUFFICIENT_BALANCE";
-                string message = errorCode == "INVOICE_CUSTOMER_UNAVAILABLE"
-                    ? "Tài khoản khách hàng không tồn tại hoặc đã bị khóa."
-                    : "Khách hàng không đủ số dư để thanh toán hóa đơn.";
-                return InvoiceResult<InvoiceSummary>.Failure(errorCode, message);
-            }
+            return InvoiceResult<InvoiceSummary>.Failure(
+                "INVOICE_INVALID_CURRENT_STATUS",
+                "Trạng thái hiện tại của hóa đơn không hợp lệ.");
         }
 
-        invoice.Status = status;
+        invoice.Status = InvoiceStatuses.Paid;
         await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
 
         return InvoiceResult<InvoiceSummary>.Success(
             ToSummary(invoice),
-            status == InvoiceStatuses.Paid
-                ? "Đã thanh toán hóa đơn và trừ số dư khách hàng."
-                : "Đã chuyển hóa đơn sang trạng thái công nợ.");
+            "Đã xác nhận hóa đơn. Số dư khách hàng không bị trừ lại.");
     }
 
     public async Task<InvoiceResult<InvoiceSummary>> FindAsync(

@@ -54,9 +54,19 @@ public sealed class TopUpService
                 "TOPUP_INVALID_NOTE",
                 "Ghi chú không được vượt quá 500 ký tự.");
         }
+
         await using var db = new NetCafeDbContext(_options);
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable,
+            cancellationToken);
+
+        await AcquireLockAsync(
+            db,
+            $"NetCafeManager:TopUp:Command:{request.CommandId:N}",
+            cancellationToken);
+        await AcquireLockAsync(
+            db,
+            $"NetCafeManager:TopUp:Account:{request.CustomerId:N}",
             cancellationToken);
 
         TopUpTransaction? previous = await db.TopUpTransactions
@@ -64,8 +74,10 @@ public sealed class TopUpService
             .SingleOrDefaultAsync(row => row.CommandId == request.CommandId, cancellationToken);
         if (previous is not null)
         {
-            if (previous.AccountId != request.CustomerId || previous.PerformedByAccountId != actor.Id ||
-                previous.HourPackageId != request.HourPackageId)
+            if (previous.AccountId != request.CustomerId ||
+                previous.PerformedByAccountId != actor.Id ||
+                previous.HourPackageId != request.HourPackageId ||
+                previous.Note != note)
             {
                 return BillingResult<TopUpReceipt>.Failure(
                     "TOPUP_COMMAND_CONFLICT",
@@ -150,6 +162,7 @@ public sealed class TopUpService
             BalanceAfter = newBalance,
             AccountId = customer.Id,
             HourPackageId = package.Id,
+            HourPackage = package,
             Amount = package.Price,
             HoursAdded = package.Hours,
             PerformedByAccountId = administrator.Id,
@@ -200,6 +213,21 @@ public sealed class TopUpService
                 row.Note))
             .ToListAsync(cancellationToken);
     }
+
+    private static Task<int> AcquireLockAsync(
+        NetCafeDbContext db,
+        string resource,
+        CancellationToken cancellationToken) =>
+        db.Database.ExecuteSqlInterpolatedAsync($"""
+            DECLARE @LockResult int;
+            EXEC @LockResult = sys.sp_getapplock
+                @Resource = {resource},
+                @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction',
+                @LockTimeout = 5000;
+            IF @LockResult < 0
+                THROW 51003, N'Không thể khóa giao dịch nạp tiền.', 1;
+            """, cancellationToken);
 
     private static TopUpReceipt ToReceipt(TopUpTransaction transaction) => new(
         transaction.Id,
