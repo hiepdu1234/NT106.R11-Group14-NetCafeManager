@@ -15,6 +15,9 @@ public static class NetworkMessageTypes
     public const string SessionGetActive = "SESSION_GET_ACTIVE";
     public const string SessionEnd = "SESSION_END";
 
+    public const string ProductPurchase = "PRODUCT_PURCHASE";
+    public const string ProductList = "PRODUCT_LIST";
+
     public const string CommandResult = "COMMAND_RESULT";
     public const string Error = "ERROR";
 }

@@ -22,3 +22,13 @@ dotnet build tests/NetCafeManager.InventorySmoke/NetCafeManager.InventorySmoke.c
 ```
 
 GitHub Actions chạy smoke test trên SQL Server 2022 để kiểm tra phân quyền, cảnh báo tồn thấp, nhập/xuất kho và xóa dịch vụ chưa được sử dụng.
+
+## Mua sản phẩm bằng số dư
+
+- Client đã đăng nhập và có phiên sử dụng đang hoạt động được xem danh sách sản phẩm.
+- Client gửi mã sản phẩm và số lượng; Server tự đọc đơn giá trong `DICH_VU`, không tin đơn giá từ Client.
+- Server kiểm tra tài khoản còn hoạt động, phiên thuộc đúng tài khoản, sản phẩm còn kinh doanh, tồn kho và số dư.
+- Trong một transaction SQL Server `Serializable` và application lock theo sản phẩm, Server trừ số dư, trừ tồn kho và ghi `CHI_TIET_DICH_VU` cùng nhau. Nếu bất kỳ bước nào thất bại, transaction được rollback.
+- `CHI_TIET_DICH_VU` liên kết với phiên sử dụng hiện tại; `DonGiaApDung` lưu giá tại thời điểm mua và `ThanhTien` do cột computed hiện có tính.
+
+Thông điệp TCP mới: `PRODUCT_LIST` và `PRODUCT_PURCHASE`.
