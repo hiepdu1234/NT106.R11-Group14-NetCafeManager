@@ -1,0 +1,77 @@
+name: Check SQL Server authentication and OTP
+
+on:
+  push:
+    branches:
+      - feature/password-reset-otp
+  pull_request:
+    paths:
+      - .github/workflows/check-authentication-sql-otp.yml
+      - src/NetCafeManager.Server/Authentication/**
+      - src/NetCafeManager.Infrastructure/**
+      - src/NetCafeManager.Shared/**
+      - tests/NetCafeManager.AuthenticationSmoke/**
+      - database/migrations/001_initial_schema.sql
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
+      - run: dotnet build tests/NetCafeManager.AuthenticationSmoke --configuration Release -p:BuildInParallel=false
+
+  authentication-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Check authentication against an isolated SQL Server database
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MSSQL_SA_PASSWORD="Aa9!$(openssl rand -hex 24)"
+          printf '::add-mask::%s\n' "$MSSQL_SA_PASSWORD"
+          export SQLCMDPASSWORD="$MSSQL_SA_PASSWORD"
+          container_id="$(docker run --rm -d -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD \
+            -p 127.0.0.1::1433 mcr.microsoft.com/mssql/server:2022-latest)"
+          trap 'docker stop "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          sql() {
+            docker exec -i -e SQLCMDPASSWORD "$container_id" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -C -b -l 2 "$@"
+          }
+
+          ready=false
+          for attempt in {1..45}; do
+            if sql -Q 'SELECT 1' </dev/null >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            echo 'SQL Server did not become ready.' >&2
+            exit 1
+          fi
+
+          sql -Q 'CREATE DATABASE [NetCafeManager_CI];' </dev/null
+          sql -d NetCafeManager_CI < database/migrations/001_initial_schema.sql
+          sql -d NetCafeManager_CI < database/seed/001_seed_core.sql
+
+          endpoint="$(docker port "$container_id" 1433/tcp)"
+          port="${endpoint##*:}"
+          export NETCAFE_AUTH_SMOKE_CONNECTION="Server=127.0.0.1,${port};Database=NetCafeManager_CI;User ID=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True;"
+          dotnet build tests/NetCafeManager.AuthenticationSmoke --configuration Release -p:BuildInParallel=false
+          dotnet run --project tests/NetCafeManager.AuthenticationSmoke --configuration Release --no-build

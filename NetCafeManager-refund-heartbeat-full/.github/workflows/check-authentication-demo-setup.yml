@@ -1,0 +1,46 @@
+name: Check authentication demo setup
+
+on:
+  push:
+    branches:
+      - feature/authentication-demo-setup
+  pull_request:
+    paths:
+      - .github/workflows/check-authentication-demo-setup.yml
+      - .gitignore
+      - docs/demo-four-authentication-flows.md
+      - scripts/Generate-DemoEnvironment.ps1
+      - scripts/New-DemoSecrets.ps1
+      - tools/NetCafeManager.DemoSetup/**
+      - src/NetCafeManager.Infrastructure/**
+      - src/NetCafeManager.Shared/**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
+      - run: dotnet build tools/NetCafeManager.DemoSetup --configuration Release -p:BuildInParallel=false
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($path in @('scripts/Generate-DemoEnvironment.ps1', 'scripts/New-DemoSecrets.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
