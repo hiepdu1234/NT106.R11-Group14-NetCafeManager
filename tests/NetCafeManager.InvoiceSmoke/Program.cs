@@ -6,6 +6,7 @@ using NetCafeManager.Server.Invoices;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Invoices;
 
+const decimal BalanceAfterSessionCharge = 80_000m;
 string connectionString = Environment.GetEnvironmentVariable("NETCAFE_INVOICE_SMOKE_CONNECTION")
     ?? throw new InvalidOperationException("Thiếu NETCAFE_INVOICE_SMOKE_CONNECTION.");
 var options = new DbContextOptionsBuilder<NetCafeDbContext>()
@@ -23,7 +24,7 @@ await using (var db = new NetCafeDbContext(options))
         NewAccount(adminId, "admin-invoice", "admin-invoice@example.test", nameof(UserRole.Administrator), hash),
         NewAccount(customerId, "client-invoice", "client-invoice@example.test", nameof(UserRole.Client), hash));
     Account customer = db.Accounts.Local.Single(account => account.Id == customerId);
-    customer.Balance = 100_000m;
+    customer.Balance = BalanceAfterSessionCharge;
     var computer = new Computer { Name = "MAY-INVOICE", Status = "Trong" };
     db.Computers.Add(computer);
     await db.SaveChangesAsync();
@@ -56,21 +57,29 @@ await using (var db = new NetCafeDbContext(options))
 
 var administrator = new AuthenticatedUser(adminId, "admin-invoice", UserRole.Administrator, 0m);
 var service = new InvoiceService(connectionString);
-InvoiceResult<InvoiceSummary> created = await service.CreateAsync(
+
+InvoiceResult<InvoiceSummary> unsupportedDiscount = await service.CreateAsync(
     administrator,
     new CreateInvoiceRequest(sessionId, 1_000m));
+Assert(!unsupportedDiscount.IsSuccess &&
+       unsupportedDiscount.ErrorCode == "INVOICE_DISCOUNT_NOT_SUPPORTED",
+    "Không được áp dụng giảm giá ngoài transaction tính tiền.");
+
+InvoiceResult<InvoiceSummary> created = await service.CreateAsync(
+    administrator,
+    new CreateInvoiceRequest(sessionId, 0m));
 if (!created.IsSuccess || created.Value is null)
 {
     throw new InvalidOperationException("Phải lập được hóa đơn.");
 }
 
 InvoiceSummary createdInvoice = created.Value;
-Assert(createdInvoice.TotalAmount == createdInvoice.UsageCost + createdInvoice.ServiceCost - 1_000m,
+Assert(createdInvoice.TotalAmount == createdInvoice.UsageCost + createdInvoice.ServiceCost,
     "Tổng tiền hóa đơn phải đúng.");
 
 InvoiceResult<InvoiceSummary> repeated = await service.CreateAsync(
     administrator,
-    new CreateInvoiceRequest(sessionId, 1_000m));
+    new CreateInvoiceRequest(sessionId, 0m));
 Assert(repeated.IsSuccess && repeated.Value?.Id == createdInvoice.Id,
     "Lập lại phải trả về hóa đơn cũ, không tạo trùng.");
 
@@ -82,20 +91,27 @@ Assert(paid.IsSuccess && paid.Value?.Status == InvoiceStatuses.Paid,
     "Phải đánh dấu hóa đơn đã thanh toán.");
 await using (var verifyDb = new NetCafeDbContext(options))
 {
-    decimal balanceAfterPayment = await verifyDb.Accounts
+    decimal balanceAfterConfirmation = await verifyDb.Accounts
         .Where(account => account.Id == customerId)
         .Select(account => account.Balance)
         .SingleAsync();
-    Assert(balanceAfterPayment == 100_000m - createdInvoice.TotalAmount,
-        "Thanh toán phải trừ đúng số tiền hóa đơn khỏi số dư.");
+    Assert(balanceAfterConfirmation == BalanceAfterSessionCharge,
+        "Xác nhận hóa đơn không được trừ số dư lần thứ hai.");
 }
 
 InvoiceResult<InvoiceSummary> duplicatePayment = await service.SetStatusAsync(
     administrator,
     createdInvoice.Id,
     InvoiceStatuses.Paid);
-Assert(!duplicatePayment.IsSuccess && duplicatePayment.ErrorCode == "INVOICE_ALREADY_PAID",
-    "Không được trừ tiền lần thứ hai khi thanh toán lại hóa đơn.");
+Assert(duplicatePayment.IsSuccess && duplicatePayment.Value?.Id == createdInvoice.Id,
+    "Xác nhận lặp lại phải trả về kết quả cũ mà không thay đổi số dư.");
+
+InvoiceResult<InvoiceSummary> debtStatus = await service.SetStatusAsync(
+    administrator,
+    createdInvoice.Id,
+    "CongNo");
+Assert(!debtStatus.IsSuccess && debtStatus.ErrorCode == "INVOICE_INVALID_STATUS",
+    "Hệ thống trả trước không được chấp nhận trạng thái công nợ.");
 
 Console.WriteLine("Invoice smoke test passed.");
 

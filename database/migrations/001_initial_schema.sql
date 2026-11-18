@@ -1,8 +1,3 @@
-/*
-  NetCafeManager - Migration 001
-  SQL Server 2019+.
-  Chạy trên cơ sở dữ liệu trống đã được chọn trước khi chạy seed.
-*/
 
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
