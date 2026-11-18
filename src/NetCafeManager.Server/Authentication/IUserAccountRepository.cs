@@ -8,8 +8,9 @@ public interface IUserAccountRepository
         string username,
         CancellationToken cancellationToken = default);
 
-    Task<bool> UpdatePasswordHashAsync(
+    Task<bool> TryUpgradePasswordHashAsync(
         Guid accountId,
-        PasswordHash passwordHash,
+        string oldHash,
+        PasswordHash newPasswordHash,
         CancellationToken cancellationToken = default);
 }

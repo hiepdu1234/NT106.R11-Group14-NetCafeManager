@@ -53,5 +53,13 @@ public sealed class InMemoryUserAccountRepository : IUserAccountRepository
         account.PasswordHash = passwordHash;
         return Task.FromResult(true);
     }
-
+    public Task<bool> TryUpgradePasswordHashAsync(
+            Guid accountId,
+            string oldHash,
+            PasswordHash newPasswordHash,
+            CancellationToken cancellationToken = default)
+    {
+        // Tạm thời chưa cần triển khai cho môi trường Test In-Memory
+        throw new NotImplementedException();
+    }
 }

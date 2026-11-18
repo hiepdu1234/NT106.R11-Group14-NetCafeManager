@@ -69,20 +69,27 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
         };
     }
 
-    public async Task<bool> UpdatePasswordHashAsync(
+    public async Task<bool> TryUpgradePasswordHashAsync(
         Guid accountId,
+        string oldHash,
         PasswordHash passwordHash,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(passwordHash);
+        ArgumentNullException.ThrowIfNull(oldHash);
         cancellationToken.ThrowIfCancellationRequested();
 
         await using var db = new NetCafeDbContext(_options);
+
+        // Cốt lõi của Optimistic Concurrency: Chỉ tìm Account nếu Hash trong DB 
+        // vẫn khớp đúng với oldHash mà ta truyền vào.
         Account? row = await db.Accounts.SingleOrDefaultAsync(
-            account => account.Id == accountId,
+            account => account.Id == accountId && account.PasswordHashBase64 == oldHash,
             cancellationToken);
+
         if (row is null)
         {
+            // Nếu null, nghĩa là mật khẩu vừa bị ai đó đổi từ nơi khác
             return false;
         }
 
@@ -90,6 +97,7 @@ public sealed class SqlServerUserAccountRepository : IUserAccountRepository
         row.PasswordIterations = passwordHash.Iterations;
         row.PasswordSaltBase64 = passwordHash.SaltBase64;
         row.PasswordHashBase64 = passwordHash.HashBase64;
+
         await db.SaveChangesAsync(cancellationToken);
         return true;
     }

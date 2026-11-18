@@ -32,7 +32,12 @@ public sealed class AuthenticationService
         ArgumentNullException.ThrowIfNull(request);
 
         string username = request.Username?.Trim() ?? string.Empty;
-        if (username.Length == 0 || string.IsNullOrEmpty(request.Password))
+
+        // Giới hạn mật khẩu từ 8 đến 64 ký tự để đảm bảo an toàn và chống DoS
+        if (username.Length == 0 ||
+            string.IsNullOrEmpty(request.Password) ||
+            request.Password.Length < 8 ||
+            request.Password.Length > 64)
         {
             return LoginResponse.Failure(InvalidCredentialsCode, InvalidCredentialsMessage);
         }
@@ -51,18 +56,30 @@ public sealed class AuthenticationService
         if (_passwordHasher.NeedsRehash(account.PasswordHash))
         {
             PasswordHash upgradedHash = _passwordHasher.HashPassword(request.Password);
-            bool updated = await _accounts.UpdatePasswordHashAsync(
+
+            // Sử dụng TryUpgradePasswordHashAsync với oldHash để chống Race Condition
+            bool updated = await _accounts.TryUpgradePasswordHashAsync(
                 account.Id,
+                account.PasswordHash.HashBase64,
                 upgradedHash,
                 cancellationToken);
+
             if (!updated)
             {
-                return LoginResponse.Failure(
-                    InvalidCredentialsCode,
-                    InvalidCredentialsMessage);
-            }
+                // Có xung đột: Đọc lại user và xác minh lại mật khẩu mới nhất
+                account = await _accounts.FindByUsernameAsync(username, cancellationToken);
 
-            account.PasswordHash = upgradedHash;
+                if (account is null ||
+                    !account.IsActive ||
+                    !_passwordHasher.VerifyPassword(request.Password, account.PasswordHash))
+                {
+                    return LoginResponse.Failure(InvalidCredentialsCode, InvalidCredentialsMessage);
+                }
+            }
+            else
+            {
+                account.PasswordHash = upgradedHash;
+            }
         }
 
         UserSession session = _sessions.Create(account, _timeProvider.GetUtcNow());
