@@ -5,6 +5,7 @@ using NetCafeManager.Server.Authentication;
 using NetCafeManager.Server.Machines;
 using NetCafeManager.Server.Networking;
 using NetCafeManager.Server.Sessions;
+using NetCafeManager.Server.Inventory;
 
 namespace NetCafeManager.Server;
 
@@ -58,6 +59,10 @@ internal static class Program
                 authentication.Authentication);
             var passwordResetHandler = new PasswordResetTcpHandler(
                 authentication.PasswordReset);
+            var productPurchaseHandler = new ProductPurchaseTcpHandler(
+                new ProductPurchaseService(connectionString),
+                new ProductInventoryService(connectionString),
+                authentication.Authentication);
 
             int port = ReadPort();
             var server = new TcpServer(
@@ -66,7 +71,8 @@ internal static class Program
                 authHandler,
                 machineHandler,
                 sessionHandler,
-                passwordResetHandler);
+                passwordResetHandler,
+                productPurchaseHandler);
 
             Console.WriteLine(
                 "NetCafeManager TCP Authentication Server");

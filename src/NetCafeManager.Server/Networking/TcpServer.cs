@@ -13,6 +13,7 @@ internal sealed class TcpServer
     private readonly MachineTcpHandler? _machineHandler;
     private readonly SessionTcpHandler? _sessionHandler;
     private readonly PasswordResetTcpHandler? _passwordResetHandler;
+    private readonly ProductPurchaseTcpHandler? _productPurchaseHandler;
 
     public TcpServer(
         IPAddress ipAddress,
@@ -20,13 +21,15 @@ internal sealed class TcpServer
         AuthTcpHandler? authHandler = null,
         MachineTcpHandler? machineHandler = null,
         SessionTcpHandler? sessionHandler = null,
-        PasswordResetTcpHandler? passwordResetHandler = null)
+        PasswordResetTcpHandler? passwordResetHandler = null,
+        ProductPurchaseTcpHandler? productPurchaseHandler = null)
     {
         _listener = new TcpListener(ipAddress, port);
         _authHandler = authHandler;
         _machineHandler = machineHandler;
         _sessionHandler = sessionHandler;
         _passwordResetHandler = passwordResetHandler;
+        _productPurchaseHandler = productPurchaseHandler;
     }
 
     public async Task StartAsync(
@@ -198,6 +201,12 @@ internal sealed class TcpServer
                 request,
                 context,
                 cancellationToken);
+        }
+
+        if (response is null && _productPurchaseHandler is not null)
+        {
+            response = await _productPurchaseHandler.HandleAsync(
+                request, context, cancellationToken);
         }
 
         if (response is null && _authHandler is not null)

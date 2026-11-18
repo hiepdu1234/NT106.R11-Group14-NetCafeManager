@@ -7,6 +7,7 @@ using System.Windows.Forms;
 using NetCafeManager.Client.Networking;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Networking;
+using NetCafeManager.Shared.Inventory;
 using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Client;
@@ -94,6 +95,18 @@ public sealed class MainForm : Form
     private readonly Label _clientWelcome = Hint("");
     private readonly Label _clientSession = Hint("");
     private readonly Label _adminWelcome = Hint("");
+    private readonly DataGridView _productGrid = new()
+    {
+        Dock = DockStyle.Top, Height = 220, ReadOnly = true,
+        AllowUserToAddRows = false, AllowUserToDeleteRows = false,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+        MultiSelect = false, RowHeadersVisible = false
+    };
+    private readonly NumericUpDown _purchaseQuantity = new()
+    { Minimum = 1, Maximum = 1000, Value = 1, Width = 110,
+      Font = new Font("Segoe UI", 11), ThousandsSeparator = true };
+    private Button? _purchaseButton;
 
     private readonly ErrorProvider _errors = new();
 
@@ -339,8 +352,22 @@ public sealed class MainForm : Form
             "GIAO DIỆN KHÁCH HÀNG", "Phiên sử dụng được tính và lưu trên Server.");
         AddItem(clientDashboard, _clientWelcome);
         AddItem(clientDashboard, _clientSession);
-        AddItem(clientDashboard, Hint(
-            "Các chức năng số dư, gói giờ, lịch sử và dịch vụ sẽ được tích hợp vào khu vực này."));
+        AddItem(clientDashboard, Hint("CHỌN SẢN PHẨM VÀ MUA BẰNG SỐ DƯ"));
+        _productGrid.Columns.Add("Id", "Mã");
+        _productGrid.Columns.Add("Name", "Sản phẩm");
+        _productGrid.Columns.Add("UnitPrice", "Đơn giá");
+        _productGrid.Columns.Add("StockQuantity", "Tồn kho");
+        AddItem(clientDashboard, _productGrid);
+        var purchaseRow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(0, 8, 0, 8) };
+        purchaseRow.Controls.Add(new Label { Text = "Số lượng:", AutoSize = true, Padding = new Padding(0, 8, 8, 0) });
+        purchaseRow.Controls.Add(_purchaseQuantity);
+        _purchaseButton = NewButton("Mua bằng số dư", isPrimary: true);
+        _purchaseButton.Click += async (_, _) => await ExecuteAsync(PurchaseProductAsync);
+        purchaseRow.Controls.Add(_purchaseButton);
+        Button refreshProducts = NewButton("Làm mới sản phẩm");
+        refreshProducts.Click += async (_, _) => await ExecuteAsync(() => LoadProductsAsync());
+        purchaseRow.Controls.Add(refreshProducts);
+        AddItem(clientDashboard, purchaseRow);
         _clientLogoutButton = NewButton("Kết thúc phiên và đăng xuất", isPrimary: true);
         _clientLogoutButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
         AddItem(clientDashboard, _clientLogoutButton);
@@ -954,6 +981,7 @@ public sealed class MainForm : Form
                 _clientSession.Text =
                     $"Phiên #{started.Value.SessionId} đã bắt đầu lúc " +
                     $"{started.Value.StartedAt.ToLocalTime():HH:mm:ss}.";
+                await LoadProductsAsync(timeout.Token);
             }
             else
             {
@@ -971,6 +999,47 @@ public sealed class MainForm : Form
         {
             _loginPassword.Clear();
         }
+    }
+
+    private async Task LoadProductsAsync(CancellationToken cancellationToken = default)
+    {
+        List<ServiceItemSummary> products = await SendResultAsync<List<ServiceItemSummary>>(
+            NetworkMessageTypes.ProductList, new { }, cancellationToken);
+        _productGrid.Rows.Clear();
+        foreach (ServiceItemSummary product in products)
+        {
+            _productGrid.Rows.Add(product.Id, product.Name,
+                $"{product.UnitPrice:N0} đ", product.StockQuantity ?? 0);
+        }
+        if (_productGrid.Rows.Count > 0)
+            _productGrid.Rows[0].Selected = true;
+        SetStatus($"Đã tải {products.Count} sản phẩm.", success: true);
+    }
+
+    private async Task PurchaseProductAsync()
+    {
+        if (_activeSession is null)
+            throw new InvalidOperationException("Không có phiên sử dụng đang hoạt động.");
+        if (_productGrid.CurrentRow is null ||
+            !int.TryParse(Convert.ToString(_productGrid.CurrentRow.Cells["Id"].Value), out int productId))
+            throw new InvalidOperationException("Hãy chọn sản phẩm cần mua.");
+
+        InventoryResult<ProductPurchaseReceipt> purchase =
+            await SendResultAsync<InventoryResult<ProductPurchaseReceipt>>(
+                NetworkMessageTypes.ProductPurchase,
+                new PurchaseProductRequest(productId, (int)_purchaseQuantity.Value),
+                CancellationToken.None);
+        if (!purchase.IsSuccess || purchase.Value is null)
+            throw new InvalidOperationException(purchase.Message);
+        ProductPurchaseReceipt receipt = purchase.Value;
+        _clientWelcome.Text = $"Số dư còn lại: {receipt.RemainingBalance:N0} đồng.";
+        await LoadProductsAsync();
+        MessageBox.Show(this,
+            $"Mua hàng thành công!\nSản phẩm: {receipt.ProductName}\n" +
+            $"Số lượng: {receipt.Quantity}\nĐơn giá: {receipt.UnitPrice:N0} đ\n" +
+            $"Thành tiền: {receipt.TotalAmount:N0} đ\n" +
+            $"Số dư còn lại: {receipt.RemainingBalance:N0} đ",
+            "Thanh toán thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private async Task RequestOtpAsync()
