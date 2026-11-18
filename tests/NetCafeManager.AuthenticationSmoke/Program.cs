@@ -38,7 +38,23 @@ var legacy = NewAccount(
     true,
     10_000m,
     legacyHasher);
-var accounts = new[] { admin, client, inactive, legacy };
+
+// Tài khoản dùng để kiểm thử thay đổi mật khẩu đồng thời.
+var rehashRace = NewAccount(
+    "rehash-race",
+    UserRole.Client,
+    true,
+    0m,
+    legacyHasher);
+
+var accounts = new[]
+{
+    admin,
+    client,
+    inactive,
+    legacy,
+    rehashRace
+};
 var clock = new TestClock();
 var sender = new CapturingCodeSender();
 byte[] otpHashSecret = RandomNumberGenerator.GetBytes(32);
@@ -120,6 +136,20 @@ try
         new VerifyPasswordResetOtpRequest(client.Username, UserRole.Client, clientOtp));
     Require(verified.IsSuccess, "Correct OTP is verified");
 
+    // Kiểm tra từ chối mật khẩu 65 ký tự khi reset.
+    PasswordResetResponse rejectedLongPassword =
+        await passwordReset.CompleteAsync(
+            new CompletePasswordResetRequest(
+                client.Username,
+                UserRole.Client,
+                clientOtp,
+                new string('x', 65)));
+
+    Require(
+        !rejectedLongPassword.IsSuccess &&
+        rejectedLongPassword.ErrorCode == "AUTH_INVALID_NEW_PASSWORD",
+        "Password reset must reject a 65-character password.");
+
     PasswordResetResponse completed = await passwordReset.CompleteAsync(
         new CompletePasswordResetRequest(
             client.Username,
@@ -181,6 +211,9 @@ try
             result.ErrorCode == "AUTH_INVALID_CREDENTIALS",
             scenario);
     }
+    await RunInMemoryLegacyHashUpgradeTestAsync();
+
+    await RunSqlConcurrentPasswordChangeRehashTestAsync(rehashRace);
 }
 finally
 {
@@ -213,6 +246,150 @@ Account NewAccount(
         PasswordSaltBase64 = hash.SaltBase64,
         PasswordHashBase64 = hash.HashBase64
     };
+}
+async Task RunInMemoryLegacyHashUpgradeTestAsync()
+{
+    const string password = "Legacy-Password-2026!";
+
+    var legacyHasher = new Pbkdf2PasswordHasher(
+        Pbkdf2PasswordHasher.MinimumAcceptedIterations);
+
+    var currentHasher = new Pbkdf2PasswordHasher(
+        Pbkdf2PasswordHasher.DefaultIterations);
+
+    PasswordHash oldHash = legacyHasher.HashPassword(password);
+
+    var account = new UserAccount
+    {
+        Id = Guid.NewGuid(),
+        Username = $"memory-legacy-{Guid.NewGuid():N}",
+        PasswordHash = oldHash,
+        Role = UserRole.Client,
+        Balance = 1000m,
+        IsActive = true
+    };
+
+    var repository = new InMemoryUserAccountRepository(
+        new[] { account });
+
+    var authentication = new AuthenticationService(
+        repository,
+        currentHasher,
+        new SessionManager());
+
+    LoginResponse login = await authentication.LoginAsync(
+        new LoginRequest(account.Username, password));
+
+    Require(
+        login.IsSuccess,
+        "In-memory account can log in using legacy password hash");
+
+    UserAccount? upgraded = await repository.FindByUsernameAsync(
+        account.Username);
+
+    Require(
+        upgraded is not null,
+        "In-memory account still exists after login");
+
+    Require(
+        upgraded!.PasswordHash.Iterations ==
+            Pbkdf2PasswordHasher.DefaultIterations,
+        "In-memory legacy hash is upgraded to current iterations");
+
+    Require(
+        upgraded.PasswordHash.HashBase64 != oldHash.HashBase64,
+        "In-memory password hash is replaced");
+
+    Require(
+        currentHasher.VerifyPassword(password, upgraded.PasswordHash),
+        "Password remains valid after hash upgrade");
+
+    Console.WriteLine(
+        "PASS: In-memory legacy password hash upgrade");
+}
+
+async Task RunSqlConcurrentPasswordChangeRehashTestAsync(Account target)
+{
+    // Hash của mật khẩu mới do một luồng khác vừa thay đổi.
+    PasswordHash replacementHash =
+        hasher.HashPassword(newClientPassword);
+
+    int passwordChangeCount = 0;
+
+    var racingRepository = new BeforeRehashPasswordChangeRepository(
+        new SqlServerUserAccountRepository(connectionString),
+        async cancellationToken =>
+        {
+            // Mô phỏng luồng B thay đổi mật khẩu
+            // sau khi luồng A đã đọc hash cũ.
+
+            await using var changeDb = new NetCafeDbContext(options);
+
+            Account row = await changeDb.Accounts.SingleAsync(
+                account => account.Id == target.Id,
+                cancellationToken);
+
+            row.PasswordAlgorithm = replacementHash.Algorithm;
+            row.PasswordIterations = replacementHash.Iterations;
+            row.PasswordSaltBase64 = replacementHash.SaltBase64;
+            row.PasswordHashBase64 = replacementHash.HashBase64;
+
+            await changeDb.SaveChangesAsync(cancellationToken);
+
+            Interlocked.Increment(ref passwordChangeCount);
+        });
+
+    var racingAuthentication = new AuthenticationService(
+        racingRepository,
+        hasher,
+        new SessionManager(),
+        clock);
+
+    // Luồng A đăng nhập bằng mật khẩu cũ.
+    LoginResponse result = await racingAuthentication.LoginAsync(
+        new LoginRequest(target.Username, originalPassword));
+
+    Require(
+        passwordChangeCount == 1,
+        "Concurrent password change must execute exactly once");
+
+    Require(
+        !result.IsSuccess &&
+        result.SessionToken is null &&
+        result.User is null &&
+        result.ErrorCode == "AUTH_INVALID_CREDENTIALS",
+        "Old password must be rejected after concurrent password change");
+
+    // Đọc lại dữ liệu thực tế từ SQL Server.
+    await using var verificationDb = new NetCafeDbContext(options);
+
+    Account stored = await verificationDb.Accounts
+        .AsNoTracking()
+        .SingleAsync(account => account.Id == target.Id);
+
+    var storedHash = new PasswordHash(
+        stored.PasswordAlgorithm,
+        stored.PasswordIterations,
+        stored.PasswordSaltBase64,
+        stored.PasswordHashBase64);
+
+    Require(
+        stored.PasswordAlgorithm == replacementHash.Algorithm &&
+        stored.PasswordIterations == replacementHash.Iterations &&
+        stored.PasswordSaltBase64 == replacementHash.SaltBase64 &&
+        stored.PasswordHashBase64 == replacementHash.HashBase64,
+        "Concurrent password change must not be overwritten by stale rehash");
+
+    Require(
+        hasher.VerifyPassword(newClientPassword, storedHash),
+        "New password must remain valid");
+
+    Require(
+        !hasher.VerifyPassword(originalPassword, storedHash),
+        "Old password must no longer be valid");
+
+    Console.WriteLine(
+        "PASS: SQL conditional rehash prevents concurrent password overwrite");
 }
 
 static string WrongOtp(string otp) => otp == "000000" ? "000001" : "000000";
@@ -257,3 +434,49 @@ sealed class CapturingCodeSender : IPasswordResetCodeSender
             ? otp
             : throw new InvalidOperationException($"No OTP was captured for {email}.");
 }
+
+
+sealed class BeforeRehashPasswordChangeRepository
+    : IUserAccountRepository
+{
+    private readonly IUserAccountRepository _inner;
+    private readonly Func<CancellationToken, Task> _beforeUpgrade;
+
+    private int _executed;
+
+    public BeforeRehashPasswordChangeRepository(
+        IUserAccountRepository inner,
+        Func<CancellationToken, Task> beforeUpgrade)
+    {
+        _inner = inner;
+        _beforeUpgrade = beforeUpgrade;
+    }
+
+    public Task<UserAccount?> FindByUsernameAsync(
+        string username,
+        CancellationToken cancellationToken = default)
+    {
+        return _inner.FindByUsernameAsync(
+            username,
+            cancellationToken);
+    }
+
+    public async Task<bool> TryUpgradePasswordHashAsync(
+        Guid accountId,
+        string oldHash,
+        PasswordHash newPasswordHash,
+        CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Exchange(ref _executed, 1) == 0)
+        {
+            await _beforeUpgrade(cancellationToken);
+        }
+
+        return await _inner.TryUpgradePasswordHashAsync(
+            accountId,
+            oldHash,
+            newPasswordHash,
+            cancellationToken);
+    }
+}
+

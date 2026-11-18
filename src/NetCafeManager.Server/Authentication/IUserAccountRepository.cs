@@ -1,3 +1,4 @@
+
 using NetCafeManager.Shared.Security;
 
 namespace NetCafeManager.Server.Authentication;

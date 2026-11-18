@@ -15,7 +15,7 @@ public sealed class PasswordResetService
     private const int OtpDigits = 6;
     private const int MaximumFailedAttempts = 5;
     private const int MinimumPasswordLength = 8;
-    private const int MaximumPasswordLength = 128;
+    private const int MaximumPasswordLength = 64;
     private const int MaximumIdentifierLength = 255;
 
     private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(5);
@@ -24,7 +24,7 @@ public sealed class PasswordResetService
     private const string InvalidOtpCode = "AUTH_INVALID_OTP";
     private const string InvalidOtpMessage = "Mã xác nhận không hợp lệ hoặc đã hết hạn.";
     private const string InvalidPasswordCode = "AUTH_INVALID_NEW_PASSWORD";
-    private const string InvalidPasswordMessage = "Mật khẩu mới phải có từ 8 đến 128 ký tự.";
+    private const string InvalidPasswordMessage = "Mật khẩu mới phải có từ 8 đến 64 ký tự.";
 
     private readonly DbContextOptions<NetCafeDbContext> _options;
     private readonly IPasswordResetCodeSender _codeSender;

@@ -23,9 +23,27 @@ var request = new CreateCustomerRequest(
     "Khách hàng kiểm thử",
     "MatKhau!123");
 
+
 CustomerResult<CustomerSummary> forbidden = await service.CreateAsync(clientActor, request);
 Assert(!forbidden.IsSuccess && forbidden.ErrorCode == "CUSTOMER_FORBIDDEN",
     "Client không được phép tạo khách hàng.");
+
+// Test từ chối mật khẩu dài hơn 64 ký tự.
+string password65 = new string('x', 65);
+
+var invalidPasswordRequest = new CreateCustomerRequest(
+    $"kh-long-{suffix}",
+    $"kh-long-{suffix}@example.test",
+    "Khách hàng kiểm thử",
+    password65);
+
+CustomerResult<CustomerSummary> invalidPassword =
+    await service.CreateAsync(administrator, invalidPasswordRequest);
+
+Assert(
+    !invalidPassword.IsSuccess &&
+    invalidPassword.ErrorCode == "CUSTOMER_INVALID_INPUT",
+    "Mật khẩu 65 ký tự khi tạo tài khoản phải bị từ chối.");
 
 CustomerResult<CustomerSummary> created = await service.CreateAsync(administrator, request);
 if (!created.IsSuccess || created.Value is null)

@@ -173,9 +173,9 @@ public sealed class MainForm : Form
         };
 
         _otp.MaxLength = 6;
-        _newPassword.MaxLength = 128;
-        _confirmPassword.MaxLength = 128;
-        _loginPassword.MaxLength = 128;
+        _newPassword.MaxLength = 64;
+        _confirmPassword.MaxLength = 64;
+        _loginPassword.MaxLength = 64;
         _machineName.MaxLength = 50;
         _machineKey.MaxLength = 512;
         _serverHost.MaxLength = 253;
@@ -395,7 +395,7 @@ public sealed class MainForm : Form
 
         // Man hinh 4: Dat lai mat khau.
         TableLayoutPanel reset = NewPage(
-            "ĐẶT MẬT KHẨU MỚI", "Mật khẩu mới phải có từ 8 đến 128 ký tự.");
+            "ĐẶT MẬT KHẨU MỚI", "Mật khẩu mới phải có từ 8 đến 64 ký tự.");
         AddItem(reset, Hint("Chỉ được gửi yêu cầu sau khi Server xác minh OTP."));
         AddField(reset, "Mật khẩu mới", _newPassword);
         AddField(reset, "Nhập lại mật khẩu mới", _confirmPassword);
@@ -1038,10 +1038,10 @@ public sealed class MainForm : Form
         }
         if (!Require(_newPassword, "Vui lòng nhập mật khẩu mới.")) return;
         if (!Require(_confirmPassword, "Vui lòng xác nhận mật khẩu mới.")) return;
-        if (_newPassword.Text.Length is < 8 or > 128)
+        if (_newPassword.Text.Length is < 8 or > 64)
         {
-            _errors.SetError(_newPassword, "Mật khẩu phải có 8 đến 128 ký tự.");
-            SetStatus("Mật khẩu mới phải có từ 8 đến 128 ký tự.", error: true);
+            _errors.SetError(_newPassword, "Mật khẩu phải có 8 đến 64 ký tự.");
+            SetStatus("Mật khẩu mới phải có từ 8 đến 64 ký tự.", error: true);
             return;
         }
         if (_newPassword.Text != _confirmPassword.Text)
