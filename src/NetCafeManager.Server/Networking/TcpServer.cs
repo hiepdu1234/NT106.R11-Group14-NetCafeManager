@@ -17,6 +17,13 @@ internal sealed class TcpServer
     private readonly ProductPurchaseTcpHandler? _productPurchaseHandler;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _heartbeatTimeout;
+    private readonly TimeSpan _heartbeatCheckInterval;
+    private readonly Func<TcpConnectionContext> _connectionContextFactory;
+
+    internal IPEndPoint? BoundEndpoint =>
+        _listener.Server.IsBound
+            ? (IPEndPoint)_listener.LocalEndpoint
+            : null;
 
     public TcpServer(
         IPAddress ipAddress,
@@ -27,7 +34,9 @@ internal sealed class TcpServer
         PasswordResetTcpHandler? passwordResetHandler = null,
         ProductPurchaseTcpHandler? productPurchaseHandler = null,
         TimeProvider? timeProvider = null,
-        TimeSpan? heartbeatTimeout = null)
+        TimeSpan? heartbeatTimeout = null,
+        TimeSpan? heartbeatCheckInterval = null,
+        Func<TcpConnectionContext>? connectionContextFactory = null)
     {
         _listener = new TcpListener(ipAddress, port);
         _authHandler = authHandler;
@@ -37,9 +46,19 @@ internal sealed class TcpServer
         _productPurchaseHandler = productPurchaseHandler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _heartbeatTimeout = heartbeatTimeout ?? HeartbeatDefaults.Timeout;
+        _heartbeatCheckInterval = heartbeatCheckInterval
+            ?? TimeSpan.FromSeconds(1);
+        _connectionContextFactory = connectionContextFactory
+            ?? (static () => new TcpConnectionContext());
         if (_heartbeatTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(heartbeatTimeout));
+        }
+
+        if (_heartbeatCheckInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(heartbeatCheckInterval));
         }
     }
 
@@ -84,7 +103,9 @@ internal sealed class TcpServer
         using (client)
         {
             Console.WriteLine("Co Client vua ket noi!");
-            var context = new TcpConnectionContext();
+            TcpConnectionContext context = _connectionContextFactory()
+                ?? throw new InvalidOperationException(
+                    "Connection context factory khong duoc tra ve null.");
             using var connectionCancellation =
                 CancellationTokenSource.CreateLinkedTokenSource(
                     cancellationToken);
@@ -216,7 +237,7 @@ internal sealed class TcpServer
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(
-                TimeSpan.FromSeconds(1),
+                _heartbeatCheckInterval,
                 _timeProvider,
                 cancellationToken);
 
