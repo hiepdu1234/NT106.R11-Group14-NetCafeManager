@@ -56,6 +56,15 @@ public sealed class MainForm : Form
         AccessibleName = "Thông báo trạng thái",
         Text = "Hãy thiết lập thiết bị và kết nối tới Server."
     };
+    private readonly Label _connectionStatus = new()
+    {
+        Dock = DockStyle.Fill,
+        TextAlign = ContentAlignment.MiddleCenter,
+        AccessibleName = "Trạng thái kết nối Server",
+        Font = new Font("Segoe UI", 9, FontStyle.Bold),
+        ForeColor = Theme.Error,
+        Text = "Mất kết nối"
+    };
     private readonly Label _deviceBadge = new()
     {
         Dock = DockStyle.Fill,
@@ -107,12 +116,21 @@ public sealed class MainForm : Form
     { Minimum = 1, Maximum = 1000, Value = 1, Width = 110,
       Font = new Font("Segoe UI", 11), ThousandsSeparator = true };
     private Button? _purchaseButton;
+    private Button? _refreshProductsButton;
 
     private readonly ErrorProvider _errors = new();
+    private readonly CancellationTokenSource _applicationLifetime = new();
 
     private Button? _handshakeButton;
     private Button? _machineLink;
+    private Button? _reconnectButton;
     private TcpClientAgent? _client;
+    private Task? _reconnectTask;
+    private int _reconnectInProgress;
+    private int _reconnectRequested;
+    private bool _isClosing;
+    private bool _allowClose;
+    private ConnectionState _connectionState = ConnectionState.Disconnected;
     private UsageSessionSummary? _activeSession;
     private bool _machineVerified;
     private bool _authenticated;
@@ -140,11 +158,50 @@ public sealed class MainForm : Form
 
         _errors.ContainerControl = this;
         _errors.BlinkStyle = ErrorBlinkStyle.NeverBlink;
-        FormClosed += (_, _) =>
+        FormClosing += async (_, e) =>
         {
-            ResetConnection();
-            _errors.Dispose();
+            if (_allowClose)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            if (_isClosing)
+            {
+                return;
+            }
+
+            _isClosing = true;
+            _applicationLifetime.Cancel();
+            if (_reconnectButton is not null)
+            {
+                _reconnectButton.Enabled = false;
+            }
+
+            try
+            {
+                if (_reconnectTask is not null)
+                {
+                    try
+                    {
+                        await _reconnectTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Đóng ứng dụng đã hủy chu kỳ reconnect.
+                    }
+                }
+
+                await ResetConnectionAsync();
+            }
+            finally
+            {
+                _applicationLifetime.Dispose();
+                _allowClose = true;
+                Close();
+            }
         };
+        FormClosed += (_, _) => _errors.Dispose();
 
         _serverHost.Text = _settings.ServerHost;
         _serverPort.Text = _settings.ServerPort.ToString();
@@ -164,23 +221,33 @@ public sealed class MainForm : Form
         _recoveryRole.Items.AddRange([UserRole.Client, UserRole.Administrator]);
         _recoveryRole.SelectedItem = UserRole.Client;
         _recoveryRole.SelectedIndexChanged += (_, _) => InvalidateRecovery();
-        _machineName.TextChanged += (_, _) =>
+        _machineName.TextChanged += async (_, _) =>
         {
             UpdateDeviceBadge();
+            UpdateButtonStates();
             if (_machineVerified || _authenticated)
             {
-                ResetConnection();
+                await ResetConnectionAsync();
                 SetStatus("Tên máy đã đổi. Hãy xác thực máy lại.");
             }
         };
-        _serverHost.TextChanged += (_, _) => InvalidateConnectionSettings();
-        _serverPort.TextChanged += (_, _) => InvalidateConnectionSettings();
-        _deviceMode.SelectedIndexChanged += (_, _) =>
+        _serverHost.TextChanged += async (_, _) =>
+        {
+            UpdateButtonStates();
+            await InvalidateConnectionSettingsAsync();
+        };
+        _serverPort.TextChanged += async (_, _) =>
+        {
+            UpdateButtonStates();
+            await InvalidateConnectionSettingsAsync();
+        };
+        _machineKey.TextChanged += (_, _) => UpdateButtonStates();
+        _deviceMode.SelectedIndexChanged += async (_, _) =>
         {
             UpdateDeviceBadge();
             if (_authenticated)
             {
-                ResetConnection();
+                await ResetConnectionAsync();
                 ShowPage("login");
             }
         };
@@ -232,7 +299,7 @@ public sealed class MainForm : Form
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 53));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         Controls.Add(root);
 
         var header = new TableLayoutPanel
@@ -294,16 +361,30 @@ public sealed class MainForm : Form
         center.Controls.Add(_pageHost, 1, 0);
         root.Controls.Add(center, 0, 1);
 
-        var footer = new Panel
+        var footer = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = Theme.Surface,
-            Padding = new Padding(24, 5, 24, 5),
+            Padding = new Padding(18, 5, 18, 5),
+            ColumnCount = 3,
+            RowCount = 1,
             Margin = Padding.Empty
         };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 145));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 175));
+        footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _status.Font = new Font("Segoe UI", 9);
         _status.ForeColor = Theme.TextSecondary;
-        footer.Controls.Add(_status);
+        _reconnectButton = NewButton("Kết nối lại Server");
+        _reconnectButton.Dock = DockStyle.Fill;
+        _reconnectButton.Height = 36;
+        _reconnectButton.Margin = new Padding(5, 2, 0, 2);
+        _reconnectButton.Click += async (_, _) =>
+            await StartReconnectAsync(failedClient: null, automatic: false);
+        footer.Controls.Add(_connectionStatus, 0, 0);
+        footer.Controls.Add(_status, 1, 0);
+        footer.Controls.Add(_reconnectButton, 2, 0);
         root.Controls.Add(footer, 0, 2);
     }
 
@@ -364,9 +445,9 @@ public sealed class MainForm : Form
         _purchaseButton = NewButton("Mua bằng số dư", isPrimary: true);
         _purchaseButton.Click += async (_, _) => await ExecuteAsync(PurchaseProductAsync);
         purchaseRow.Controls.Add(_purchaseButton);
-        Button refreshProducts = NewButton("Làm mới sản phẩm");
-        refreshProducts.Click += async (_, _) => await ExecuteAsync(() => LoadProductsAsync());
-        purchaseRow.Controls.Add(refreshProducts);
+        _refreshProductsButton = NewButton("Làm mới sản phẩm");
+        _refreshProductsButton.Click += async (_, _) => await ExecuteAsync(() => LoadProductsAsync());
+        purchaseRow.Controls.Add(_refreshProductsButton);
         AddItem(clientDashboard, purchaseRow);
         _clientLogoutButton = NewButton("Kết thúc phiên và đăng xuất", isPrimary: true);
         _clientLogoutButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
@@ -606,19 +687,67 @@ public sealed class MainForm : Form
     private void UpdateButtonStates()
     {
         foreach (Button button in _buttons)
+        {
             button.Enabled = !_busy;
+        }
+
+        bool connected = _connectionState == ConnectionState.Connected &&
+                         _client is not null &&
+                         _machineVerified;
+        bool reconnecting = _connectionState is ConnectionState.Reconnecting or
+            ConnectionState.Connecting;
+        bool canUseSession = connected && _authenticated && _activeSession is not null;
+
+        if (_requestOtpButton is not null)
+            _requestOtpButton.Enabled = !_busy && !reconnecting;
+        if (_verifyOtpButton is not null)
+            _verifyOtpButton.Enabled = !_busy && !reconnecting &&
+                                       _recoveryStage == RecoveryStage.OtpRequested;
         if (_resetButton is not null)
-            _resetButton.Enabled = !_busy && _recoveryStage == RecoveryStage.OtpVerified;
+            _resetButton.Enabled = !_busy && !reconnecting &&
+                                   _recoveryStage == RecoveryStage.OtpVerified;
         if (_clientLogoutButton is not null)
-            _clientLogoutButton.Enabled = !_busy && _authenticated;
+            _clientLogoutButton.Enabled = !_busy && connected && _authenticated;
         if (_adminLogoutButton is not null)
-            _adminLogoutButton.Enabled = !_busy && _authenticated;
+            _adminLogoutButton.Enabled = !_busy && connected && _authenticated;
         if (_machineLink is not null)
-            _machineLink.Enabled = !_busy && !_authenticated;
+            _machineLink.Enabled = !_busy && !_authenticated &&
+                                   _connectionState is not ConnectionState.Reconnecting and
+                                   not ConnectionState.Connecting;
         if (_handshakeButton is not null)
-            _handshakeButton.Enabled = !_busy && !_authenticated;
+            _handshakeButton.Enabled = !_busy && !_authenticated &&
+                                       _connectionState == ConnectionState.Disconnected;
         if (_loginButton is not null)
-            _loginButton.Enabled = !_busy && !_authenticated;
+            _loginButton.Enabled = !_busy && connected && !_authenticated;
+        if (_purchaseButton is not null)
+            _purchaseButton.Enabled = !_busy && canUseSession;
+        if (_refreshProductsButton is not null)
+            _refreshProductsButton.Enabled = !_busy && canUseSession;
+        if (_reconnectButton is not null)
+            _reconnectButton.Enabled = !_busy &&
+                                       _connectionState == ConnectionState.Disconnected &&
+                                       !_isClosing &&
+                                       !string.IsNullOrWhiteSpace(_serverHost.Text) &&
+                                       !string.IsNullOrWhiteSpace(_machineName.Text) &&
+                                       !string.IsNullOrWhiteSpace(_machineKey.Text);
+    }
+
+    private void SetConnectionState(ConnectionState state)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        _connectionState = state;
+        (_connectionStatus.Text, _connectionStatus.ForeColor) = state switch
+        {
+            ConnectionState.Connected => ("Đã kết nối", Theme.Success),
+            ConnectionState.Connecting => ("Đang kết nối", Theme.Cyan),
+            ConnectionState.Reconnecting => ("Đang kết nối lại", Color.DarkOrange),
+            _ => ("Mất kết nối", Theme.Error)
+        };
+        UpdateButtonStates();
     }
 
     private void InvalidateRecovery()
@@ -630,14 +759,14 @@ public sealed class MainForm : Form
         UpdateButtonStates();
     }
 
-    private void InvalidateConnectionSettings()
+    private async Task InvalidateConnectionSettingsAsync()
     {
         if (!_machineVerified && !_authenticated)
         {
             return;
         }
 
-        ResetConnection();
+        await ResetConnectionAsync();
         ShowPage("login");
         SetStatus("Cấu hình Server đã thay đổi. Hãy xác thực thiết bị lại.");
     }
@@ -666,20 +795,20 @@ public sealed class MainForm : Form
         }
         catch (OperationCanceledException)
         {
-            ResetConnection();
-            SetStatus("Máy chủ không phản hồi đúng thời gian. Hãy kết nối lại.", error: true);
+            SetStatus("Yêu cầu tới Server bị timeout. Đang kiểm tra và khôi phục kết nối.", error: true);
+            await HandleNetworkFailureAsync();
         }
         catch (Exception ex) when (ex is IOException or System.Net.Sockets.SocketException)
         {
-            ResetConnection();
             SetStatus(
-                $"Không kết nối được tới Server tại {_serverHost.Text.Trim()}:{_serverPort.Text.Trim()}.",
+                $"Mất kết nối tới Server tại {_serverHost.Text.Trim()}:{_serverPort.Text.Trim()}.",
                 error: true);
+            await HandleNetworkFailureAsync();
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
         {
-            ResetConnection();
             SetStatus("Phản hồi từ Server không đúng định dạng giao thức.", error: true);
+            await HandleNetworkFailureAsync();
         }
         catch (InvalidOperationException ex)
         {
@@ -702,28 +831,36 @@ public sealed class MainForm : Form
         }
     }
 
-    // TCP ket noi dai han: server luu Machine/Authentication/Session theo ket noi.
-    // Khong mo TcpClient moi cho moi AUTH_LOGIN/SESSION_START.
+    // TCP được duy trì lâu dài. Chỉ các yêu cầu khôi phục mật khẩu mới được phép
+    // mở kết nối chưa xác thực máy; đăng nhập/giao dịch luôn cần handshake hợp lệ.
     private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
-        if (_client is not null) return;
+        if (_client is not null)
+        {
+            return;
+        }
+
         string host = _serverHost.Text.Trim();
         if (string.IsNullOrWhiteSpace(host))
         {
             throw new InvalidOperationException("Vui lòng nhập địa chỉ Server.");
         }
 
-        int port = ReadServerPort();
         var client = new TcpClientAgent();
         client.HeartbeatFailed += HandleHeartbeatFailure;
+        _client = client;
         try
         {
-            await client.ConnectAsync(host, port, cancellationToken);
-            _client = client;
+            await client.ConnectAsync(host, ReadServerPort(), cancellationToken);
         }
         catch
         {
-            client.Dispose();
+            if (ReferenceEquals(_client, client))
+            {
+                _client = null;
+            }
+            client.HeartbeatFailed -= HandleHeartbeatFailure;
+            await client.DisposeAsync();
             throw;
         }
     }
@@ -733,21 +870,61 @@ public sealed class MainForm : Form
         T payload,
         CancellationToken cancellationToken)
     {
+        bool isPasswordRecovery = type is
+            NetworkMessageTypes.AuthForgotPassword or
+            NetworkMessageTypes.AuthVerifyOtp or
+            NetworkMessageTypes.AuthResetPassword;
+
+        if (!isPasswordRecovery &&
+            (_connectionState != ConnectionState.Connected ||
+             !_machineVerified ||
+             _client is null))
+        {
+            throw new InvalidOperationException(
+                "Client chưa xác thực kết nối với Server. Hãy kết nối lại và xác thực máy.");
+        }
+
         await EnsureConnectedAsync(cancellationToken);
         SetStatus("Đang gửi yêu cầu tới Server...");
+        return await SendOnClientAsync(_client!, type, payload, cancellationToken);
+    }
+
+    private async Task<NetworkMessage> SendOnClientAsync<T>(
+        TcpClientAgent client,
+        string type,
+        T payload,
+        CancellationToken cancellationToken)
+    {
         var request = new NetworkMessage(
             Guid.NewGuid().ToString("N"),
             type,
             _machineName.Text.Trim(),
             null,
             JsonSerializer.SerializeToElement(payload, JsonOptions));
-        NetworkMessage response = await _client!.SendRequestAsync(request, cancellationToken);
+        NetworkMessage response = await client.SendRequestAsync(request, cancellationToken);
         string? error = ReadError(response);
         if (error is not null)
+        {
             throw new InvalidOperationException(error);
+        }
         if (response.Type != NetworkMessageTypes.CommandResult)
+        {
             throw new InvalidDataException("Server trả về loại thông điệp không hợp lệ.");
+        }
         return response;
+    }
+
+    private async Task<TResponse> SendResultOnClientAsync<TResponse, TPayload>(
+        TcpClientAgent client,
+        string type,
+        TPayload payload,
+        CancellationToken cancellationToken)
+        where TResponse : class
+    {
+        NetworkMessage response = await SendOnClientAsync(
+            client, type, payload, cancellationToken);
+        return response.Data.Deserialize<TResponse>(JsonOptions)
+               ?? throw new InvalidDataException("Server trả dữ liệu không hợp lệ.");
     }
 
     private async Task<T> SendResultAsync<T>(
@@ -764,41 +941,321 @@ public sealed class MainForm : Form
         TcpClientAgent failedClient,
         Exception exception)
     {
-        if (IsDisposed || Disposing)
+        if (IsDisposed || Disposing || _isClosing ||
+            _applicationLifetime.IsCancellationRequested || !IsHandleCreated)
         {
             return;
         }
 
-        BeginInvoke(new Action(() =>
+        try
         {
-            if (!ReferenceEquals(_client, failedClient))
+            BeginInvoke(new Action(() =>
+            {
+                if (_isClosing || !ReferenceEquals(_client, failedClient))
+                {
+                    return;
+                }
+
+                SetConnectionState(ConnectionState.Disconnected);
+                SetStatus("Heartbeat thất bại. Client đã khóa giao dịch và đang khôi phục kết nối.",
+                    error: true);
+
+                if (Volatile.Read(ref _reconnectInProgress) == 1)
+                {
+                    Interlocked.Exchange(ref _reconnectRequested, 1);
+                    return;
+                }
+
+                _ = StartReconnectAsync(failedClient, automatic: true);
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            // Form có thể đang đóng khi callback heartbeat được đưa về UI thread.
+        }
+    }
+
+    private async Task HandleNetworkFailureAsync()
+    {
+        if (_connectionState is ConnectionState.Reconnecting or
+            ConnectionState.Disconnected)
+        {
+            // Một callback từ request cũ không được phép hủy socket mới đang handshake.
+            return;
+        }
+
+        if (_connectionState == ConnectionState.Connected && _machineVerified)
+        {
+            await StartReconnectAsync(_client, automatic: true);
+            return;
+        }
+
+        await ResetConnectionAsync();
+        SetConnectionState(ConnectionState.Disconnected);
+    }
+
+    private Task StartReconnectAsync(
+        TcpClientAgent? failedClient,
+        bool automatic)
+    {
+        if (_isClosing || _applicationLifetime.IsCancellationRequested)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0)
+        {
+            return _reconnectTask ?? Task.CompletedTask;
+        }
+
+        _reconnectTask = ReconnectCoreAsync(failedClient, automatic);
+        return _reconnectTask;
+    }
+
+    private async Task ReconnectCoreAsync(
+        TcpClientAgent? failedClient,
+        bool automatic)
+    {
+        try
+        {
+            SetConnectionState(ConnectionState.Reconnecting);
+            bool reset = await ResetConnectionAsync(
+                failedClient,
+                updateConnectionState: false);
+            if (!reset || _isClosing)
             {
                 return;
             }
 
-            ResetConnection();
             ShowPage("login");
+            SetConnectionState(ConnectionState.Reconnecting);
+
+            TimeSpan[] retryDelays = automatic
+                ? [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)]
+                : [TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
+
+            Exception? lastError = null;
+            for (int attempt = 0; attempt < retryDelays.Length; attempt++)
+            {
+                CancellationToken cancellationToken = _applicationLifetime.Token;
+                if (retryDelays[attempt] > TimeSpan.Zero)
+                {
+                    await Task.Delay(retryDelays[attempt], cancellationToken);
+                }
+
+                if (_isClosing)
+                {
+                    return;
+                }
+
+                SetConnectionState(ConnectionState.Reconnecting);
+                SetStatus($"Đang kết nối lại với Server... lần thử {attempt + 1}/3");
+
+                using var attemptTimeout = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+                attemptTimeout.CancelAfter(TimeSpan.FromSeconds(20));
+
+                try
+                {
+                    VerifiedMachine verified = await ConnectAndHandshakeAsync(
+                        attemptTimeout.Token);
+                    if (_isClosing)
+                    {
+                        await ResetConnectionAsync(_client);
+                        return;
+                    }
+
+                    SetConnectionState(ConnectionState.Connected);
+                    ShowPage("login");
+                    SetStatus(
+                        $"Đã kết nối lại và xác thực máy {verified.MachineName}. " +
+                        "Vui lòng đăng nhập lại để tạo phiên mới.",
+                        success: true);
+                    return;
+                }
+                catch (OperationCanceledException)
+                    when (_applicationLifetime.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    lastError = exception;
+                    await ResetConnectionAsync();
+                    if (!_isClosing)
+                    {
+                        SetConnectionState(ConnectionState.Reconnecting);
+                    }
+                }
+            }
+
+            SetConnectionState(ConnectionState.Disconnected);
             SetStatus(
-                "Da mat ket noi heartbeat voi Server. Hay xac thuc may lai.",
+                $"Không thể kết nối lại sau 3 lần thử. " +
+                $"Kiểm tra Server/mạng rồi bấm 'Kết nối lại Server'. " +
+                $"Chi tiết: {lastError?.Message}",
                 error: true);
-        }));
+        }
+        catch (OperationCanceledException)
+            when (_applicationLifetime.IsCancellationRequested)
+        {
+            // Đóng ứng dụng đã hủy chu kỳ reconnect.
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnectInProgress, 0);
+            _reconnectTask = null;
+            if (!_isClosing && !IsDisposed && IsHandleCreated)
+            {
+                UpdateButtonStates();
+                if (Interlocked.Exchange(ref _reconnectRequested, 0) == 1)
+                {
+                    _ = StartReconnectAsync(_client, automatic: true);
+                }
+            }
+        }
     }
 
-    private void ResetConnection()
+    private async Task<bool> ResetConnectionAsync(
+        TcpClientAgent? expectedClient = null,
+        bool updateConnectionState = true)
     {
-        _client?.Dispose();
+        TcpClientAgent? current = _client;
+        if (expectedClient is not null && !ReferenceEquals(current, expectedClient))
+        {
+            return false;
+        }
+
         _client = null;
+        if (current is not null)
+        {
+            current.HeartbeatFailed -= HandleHeartbeatFailure;
+            await current.DisposeAsync();
+        }
+
         _activeSession = null;
         _machineVerified = false;
         _authenticated = false;
+        _clientWelcome.Text = string.Empty;
+        _clientSession.Text = string.Empty;
+        _adminWelcome.Text = string.Empty;
         _machineStatus.Text = "Máy chưa được xác thực.";
-        UpdateButtonStates();
+        if (updateConnectionState)
+        {
+            SetConnectionState(ConnectionState.Disconnected);
+        }
+        else
+        {
+            UpdateButtonStates();
+        }
+        return true;
     }
 
     private void EnsureMachineVerified()
     {
-        if (_client is null || !_machineVerified)
-            throw new InvalidOperationException("Hãy xác thực máy trạm trước khi đăng nhập.");
+        if (_client is null ||
+            !_machineVerified ||
+            _connectionState != ConnectionState.Connected)
+        {
+            throw new InvalidOperationException(
+                "Hãy kết nối và xác thực máy trạm với Server trước khi đăng nhập.");
+        }
+    }
+
+    private async Task<VerifiedMachine> ConnectAndHandshakeAsync(
+        CancellationToken cancellationToken)
+    {
+        string host = _serverHost.Text.Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new InvalidOperationException("Vui lòng nhập địa chỉ Server.");
+        }
+        if (string.IsNullOrWhiteSpace(_machineName.Text))
+        {
+            throw new InvalidOperationException("Vui lòng nhập tên máy.");
+        }
+
+        byte[] machineKey;
+        try
+        {
+            machineKey = Convert.FromBase64String(_machineKey.Text.Trim());
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Khóa máy Base64 không hợp lệ.");
+        }
+
+        if (machineKey.Length < 32)
+        {
+            CryptographicOperations.ZeroMemory(machineKey);
+            throw new InvalidOperationException("Khóa máy phải chứa ít nhất 32 byte.");
+        }
+
+        var client = new TcpClientAgent();
+        client.HeartbeatFailed += HandleHeartbeatFailure;
+        _client = client;
+
+        try
+        {
+            await client.ConnectAsync(host, ReadServerPort(), cancellationToken);
+
+            SessionResult<MachineHandshakeChallenge> challenge =
+                await SendResultOnClientAsync<
+                    SessionResult<MachineHandshakeChallenge>,
+                    MachineHandshakeBeginRequest>(
+                    client,
+                    NetworkMessageTypes.MachineHandshakeBegin,
+                    new MachineHandshakeBeginRequest(_machineName.Text.Trim()),
+                    cancellationToken);
+            if (!challenge.IsSuccess || challenge.Value is null)
+            {
+                throw new InvalidOperationException(challenge.Message);
+            }
+
+            string proof = MachineHandshakeProof.ComputeBase64(machineKey, challenge.Value);
+            SessionResult<VerifiedMachine> completed =
+                await SendResultOnClientAsync<
+                    SessionResult<VerifiedMachine>,
+                    MachineHandshakeCompleteRequest>(
+                    client,
+                    NetworkMessageTypes.MachineHandshakeComplete,
+                    new MachineHandshakeCompleteRequest(challenge.Value.ChallengeId, proof),
+                    cancellationToken);
+            if (!completed.IsSuccess || completed.Value is null)
+            {
+                throw new InvalidOperationException(completed.Message);
+            }
+
+            _machineVerified = true;
+            _authenticated = false;
+            _activeSession = null;
+            client.StartHeartbeat(completed.Value.MachineName);
+            _machineStatus.Text = $"Đã xác thực: {completed.Value.MachineName}";
+            _settings = DesktopSettings.Create(
+                _serverHost.Text,
+                ReadServerPort(),
+                SelectedMode(),
+                completed.Value.MachineName,
+                _machineKey.Text);
+            _settings.Save();
+            UpdateDeviceBadge();
+            return completed.Value;
+        }
+        catch
+        {
+            if (ReferenceEquals(_client, client))
+            {
+                _client = null;
+            }
+            client.HeartbeatFailed -= HandleHeartbeatFailure;
+            await client.DisposeAsync();
+            _machineVerified = false;
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(machineKey);
+        }
     }
 
     private UserRole SelectedRole() =>
@@ -824,78 +1281,37 @@ public sealed class MainForm : Form
     private async Task HandshakeAsync()
     {
         if (!Require(_serverHost, "Vui lòng nhập địa chỉ Server.")) return;
-        int serverPort = ReadServerPort();
+        _ = ReadServerPort();
         if (!Require(_machineName, "Vui lòng nhập tên máy.")) return;
         if (!Require(_machineKey, "Vui lòng nhập khóa máy Base64.")) return;
 
-        byte[] machineKey;
+        await ResetConnectionAsync();
+        SetConnectionState(ConnectionState.Connecting);
         try
         {
-            machineKey = Convert.FromBase64String(_machineKey.Text.Trim());
-        }
-        catch (FormatException)
-        {
-            _machineKey.Clear();
-            SetStatus("Khóa máy Base64 không hợp lệ.", error: true);
-            return;
-        }
-        if (machineKey.Length < 32)
-        {
-            CryptographicOperations.ZeroMemory(machineKey);
-            _machineKey.Clear();
-            SetStatus("Khóa máy phải chứa ít nhất 32 byte.", error: true);
-            return;
-        }
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                _applicationLifetime.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
 
-        try
-        {
-            ResetConnection();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            SessionResult<MachineHandshakeChallenge> challenge =
-                await SendResultAsync<SessionResult<MachineHandshakeChallenge>>(
-                    NetworkMessageTypes.MachineHandshakeBegin,
-                    new MachineHandshakeBeginRequest(_machineName.Text.Trim()),
-                    timeout.Token);
-            if (!challenge.IsSuccess || challenge.Value is null)
-                throw new InvalidOperationException(challenge.Message);
-
-            string proof = MachineHandshakeProof.ComputeBase64(machineKey, challenge.Value);
-            SessionResult<VerifiedMachine> completed =
-                await SendResultAsync<SessionResult<VerifiedMachine>>(
-                    NetworkMessageTypes.MachineHandshakeComplete,
-                    new MachineHandshakeCompleteRequest(challenge.Value.ChallengeId, proof),
-                    timeout.Token);
-            if (!completed.IsSuccess || completed.Value is null)
-                throw new InvalidOperationException(completed.Message);
-
-            _machineVerified = true;
-            _client!.StartHeartbeat(completed.Value.MachineName);
-            _machineStatus.Text = $"Đã xác thực: {completed.Value.MachineName}";
-            _settings = DesktopSettings.Create(
-                _serverHost.Text,
-                serverPort,
-                SelectedMode(),
-                completed.Value.MachineName,
-                _machineKey.Text);
-            _settings.Save();
-            UpdateDeviceBadge();
+            VerifiedMachine verified = await ConnectAndHandshakeAsync(timeout.Token);
+            SetConnectionState(ConnectionState.Connected);
             ShowPage("login");
-            SetStatus($"Máy {completed.Value.MachineName} đã xác thực. Có thể đăng nhập.", success: true);
+            SetStatus(
+                $"Máy {verified.MachineName} đã xác thực. Có thể đăng nhập.",
+                success: true);
         }
         catch
         {
-            ResetConnection();
+            await ResetConnectionAsync();
+            SetConnectionState(ConnectionState.Disconnected);
             throw;
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(machineKey);
         }
     }
 
     private async Task EndSessionAsync()
     {
         if (!_authenticated) return;
+        EnsureMachineVerified();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         if (_activeSession is not null)
         {
@@ -1029,6 +1445,7 @@ public sealed class MainForm : Form
 
     private async Task LoadProductsAsync(CancellationToken cancellationToken = default)
     {
+        EnsureMachineVerified();
         List<ServiceItemSummary> products = await SendResultAsync<List<ServiceItemSummary>>(
             NetworkMessageTypes.ProductList, new { }, cancellationToken);
         _productGrid.Rows.Clear();
@@ -1044,7 +1461,8 @@ public sealed class MainForm : Form
 
     private async Task PurchaseProductAsync()
     {
-        if (_activeSession is null)
+        EnsureMachineVerified();
+        if (!_authenticated || _activeSession is null)
             throw new InvalidOperationException("Không có phiên sử dụng đang hoạt động.");
         if (_productGrid.CurrentRow is null ||
             !int.TryParse(Convert.ToString(_productGrid.CurrentRow.Cells["Id"].Value), out int productId))
@@ -1159,7 +1577,7 @@ public sealed class MainForm : Form
             {
                 _recoveryStage = RecoveryStage.None;
                 _otp.Clear();
-                ResetConnection();
+                await ResetConnectionAsync();
                 ShowPage("login");
                 SetStatus(result.Message + " Hãy xác thực máy trước khi đăng nhập lại.", success: true);
                 MessageBox.Show(this, result.Message, "NetCafeManager",
