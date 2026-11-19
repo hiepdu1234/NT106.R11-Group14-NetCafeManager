@@ -14,6 +14,7 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<HourPackage> HourPackages => Set<HourPackage>();
     public DbSet<TopUpTransaction> TopUpTransactions => Set<TopUpTransaction>();
+    public DbSet<BalanceRefund> BalanceRefunds => Set<BalanceRefund>();
     public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
     public DbSet<RemoteCommand> RemoteCommands => Set<RemoteCommand>();
     public DbSet<BlockPolicy> BlockPolicies => Set<BlockPolicy>();
@@ -29,6 +30,7 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
         ConfigureInvoices(modelBuilder);
         ConfigureHourPackages(modelBuilder);
         ConfigureTopUpTransactions(modelBuilder);
+        ConfigureBalanceRefunds(modelBuilder);
         ConfigurePasswordResetOtps(modelBuilder);
         ConfigureRemoteCommands(modelBuilder);
         ConfigureBlockPolicies(modelBuilder);
@@ -401,6 +403,69 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
             entity.HasOne(transaction => transaction.HourPackage)
                 .WithMany(package => package.TopUpTransactions)
                 .HasForeignKey(transaction => transaction.HourPackageId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureBalanceRefunds(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<BalanceRefund>(entity =>
+        {
+            entity.ToTable("GIAO_DICH_HOAN_TIEN", table =>
+            {
+                table.HasCheckConstraint("CK_GIAO_DICH_HOAN_TIEN_SoTien", "[SoTien] > 0");
+                table.HasCheckConstraint("CK_GIAO_DICH_HOAN_TIEN_SoDuTruoc", "[SoDuTruocGiaoDich] > 0");
+                table.HasCheckConstraint("CK_GIAO_DICH_HOAN_TIEN_SoDuSau", "[SoDuSauGiaoDich] = 0");
+                table.HasCheckConstraint(
+                    "CK_GIAO_DICH_HOAN_TIEN_SoTienKhopSoDu",
+                    "[SoTien] = [SoDuTruocGiaoDich] - [SoDuSauGiaoDich]");
+                table.HasCheckConstraint(
+                    "CK_GIAO_DICH_HOAN_TIEN_PhuongThuc",
+                    "[PhuongThuc] IN (N'TienMat', N'ChuyenKhoan')");
+                table.HasCheckConstraint(
+                    "CK_GIAO_DICH_HOAN_TIEN_LyDo",
+                    "LEN(LTRIM(RTRIM([LyDo]))) > 0");
+            });
+
+            entity.HasKey(refund => refund.Id);
+            entity.Property(refund => refund.Id)
+                .HasColumnName("MaHoan")
+                .UseIdentityColumn();
+            entity.Property(refund => refund.CommandId)
+                .HasColumnName("CommandId")
+                .ValueGeneratedNever();
+            entity.HasIndex(refund => refund.CommandId).IsUnique();
+            entity.Property(refund => refund.AccountId).HasColumnName("MaTK");
+            entity.Property(refund => refund.Amount)
+                .HasColumnName("SoTien")
+                .HasPrecision(12, 2);
+            entity.Property(refund => refund.BalanceBefore)
+                .HasColumnName("SoDuTruocGiaoDich")
+                .HasPrecision(12, 2);
+            entity.Property(refund => refund.BalanceAfter)
+                .HasColumnName("SoDuSauGiaoDich")
+                .HasPrecision(12, 2);
+            entity.Property(refund => refund.PerformedByAccountId)
+                .HasColumnName("NguoiThucHien");
+            entity.Property(refund => refund.Method)
+                .HasColumnName("PhuongThuc")
+                .HasMaxLength(20)
+                .IsRequired();
+            entity.Property(refund => refund.Reason)
+                .HasColumnName("LyDo")
+                .HasMaxLength(500)
+                .IsRequired();
+            entity.Property(refund => refund.CreatedAtUtc)
+                .HasColumnName("ThoiDiem")
+                .HasColumnType("datetime2");
+
+            entity.HasOne(refund => refund.Account)
+                .WithMany(account => account.ReceivedRefunds)
+                .HasForeignKey(refund => refund.AccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(refund => refund.PerformedByAccount)
+                .WithMany(account => account.PerformedRefunds)
+                .HasForeignKey(refund => refund.PerformedByAccountId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

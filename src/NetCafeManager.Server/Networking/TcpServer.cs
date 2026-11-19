@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using NetCafeManager.Server.Authentication;
 using NetCafeManager.Shared.Networking;
+using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Server.Networking;
 
@@ -14,6 +15,8 @@ internal sealed class TcpServer
     private readonly SessionTcpHandler? _sessionHandler;
     private readonly PasswordResetTcpHandler? _passwordResetHandler;
     private readonly ProductPurchaseTcpHandler? _productPurchaseHandler;
+    private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _heartbeatTimeout;
 
     public TcpServer(
         IPAddress ipAddress,
@@ -22,7 +25,9 @@ internal sealed class TcpServer
         MachineTcpHandler? machineHandler = null,
         SessionTcpHandler? sessionHandler = null,
         PasswordResetTcpHandler? passwordResetHandler = null,
-        ProductPurchaseTcpHandler? productPurchaseHandler = null)
+        ProductPurchaseTcpHandler? productPurchaseHandler = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? heartbeatTimeout = null)
     {
         _listener = new TcpListener(ipAddress, port);
         _authHandler = authHandler;
@@ -30,6 +35,12 @@ internal sealed class TcpServer
         _sessionHandler = sessionHandler;
         _passwordResetHandler = passwordResetHandler;
         _productPurchaseHandler = productPurchaseHandler;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _heartbeatTimeout = heartbeatTimeout ?? HeartbeatDefaults.Timeout;
+        if (_heartbeatTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(heartbeatTimeout));
+        }
     }
 
     public async Task StartAsync(
@@ -74,6 +85,13 @@ internal sealed class TcpServer
         {
             Console.WriteLine("Co Client vua ket noi!");
             var context = new TcpConnectionContext();
+            using var connectionCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+            Task heartbeatMonitor = MonitorHeartbeatAsync(
+                client,
+                context,
+                connectionCancellation.Token);
             string? remoteIpAddress =
                 (client.Client.RemoteEndPoint as IPEndPoint)?
                 .Address
@@ -89,7 +107,7 @@ internal sealed class TcpServer
                     NetworkMessage? request =
                         await FrameProtocol.ReceiveAsync(
                             stream,
-                            cancellationToken);
+                            connectionCancellation.Token);
 
                     // Client dong ket noi
                     if (request is null)
@@ -104,13 +122,13 @@ internal sealed class TcpServer
                         request,
                         context,
                         remoteIpAddress,
-                        cancellationToken);
+                        connectionCancellation.Token);
 
                     // Gui phan hoi cho Client
                     await FrameProtocol.SendAsync(
                         stream,
                         response,
-                        cancellationToken);
+                        connectionCancellation.Token);
                 }
             }
             catch (OperationCanceledException)
@@ -125,6 +143,16 @@ internal sealed class TcpServer
             }
             finally
             {
+                connectionCancellation.Cancel();
+                try
+                {
+                    await heartbeatMonitor;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Ket noi da dong hoac Server dang dung.
+                }
+
                 using var cleanupTimeout =
                     new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try
@@ -150,15 +178,74 @@ internal sealed class TcpServer
                             context,
                             cleanupTimeout.Token);
                     }
+
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(
                         $"Loi don dep ket noi: {ex.GetType().Name}");
                 }
+
+                try
+                {
+                    if (_machineHandler is not null)
+                    {
+                        using var machineCleanupTimeout =
+                            new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await _machineHandler.MarkDisconnectedAsync(
+                            context,
+                            machineCleanupTimeout.Token);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"Loi cap nhat MatKetNoi: {ex.GetType().Name}");
+                }
             }
 
             Console.WriteLine("Client da ngat ket noi.");
+        }
+    }
+
+    private async Task MonitorHeartbeatAsync(
+        TcpClient client,
+        TcpConnectionContext context,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(
+                TimeSpan.FromSeconds(1),
+                _timeProvider,
+                cancellationToken);
+
+            if (!HeartbeatTimeoutPolicy.IsTimedOut(
+                    context.LastHeartbeatReceivedAt,
+                    _timeProvider.GetUtcNow(),
+                    _heartbeatTimeout))
+            {
+                continue;
+            }
+
+            context.HeartbeatTimedOut = true;
+            Console.WriteLine(
+                $"Heartbeat timeout cho may {context.VerifiedMachine?.MachineName ?? "chua-xac-thuc"}.");
+            try
+            {
+                client.Client.Shutdown(SocketShutdown.Both);
+            }
+            catch (SocketException)
+            {
+                // Socket co the da dong dong thoi.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Socket da duoc giai phong.
+            }
+
+            client.Close();
+            return;
         }
     }
 

@@ -17,6 +17,8 @@ public sealed class Account
     public ICollection<UsageSession> UsageSessions { get; } = [];
     public ICollection<TopUpTransaction> ReceivedTopUps { get; } = [];
     public ICollection<TopUpTransaction> PerformedTopUps { get; } = [];
+    public ICollection<BalanceRefund> ReceivedRefunds { get; } = [];
+    public ICollection<BalanceRefund> PerformedRefunds { get; } = [];
     public ICollection<PasswordResetOtp> PasswordResetOtps { get; } = [];
     public ICollection<RemoteCommand> RemoteCommands { get; } = [];
     public ICollection<BlockPolicy> CreatedBlockPolicies { get; } = [];

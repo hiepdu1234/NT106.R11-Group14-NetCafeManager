@@ -1,6 +1,8 @@
 
 using System.Net.Sockets;
+using System.Text.Json;
 using NetCafeManager.Shared.Networking;
+using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Client.Networking;
 
@@ -10,6 +12,10 @@ internal sealed class TcpClientAgent : IDisposable
     private NetworkStream? _stream;
 
     private readonly SemaphoreSlim _requestLock = new(1, 1);
+    private CancellationTokenSource? _heartbeatCancellation;
+    private Task? _heartbeatTask;
+
+    public event Action<TcpClientAgent, Exception>? HeartbeatFailed;
 
     // Ket noi den TCP Server
     public async Task ConnectAsync(
@@ -94,12 +100,86 @@ internal sealed class TcpClientAgent : IDisposable
         }
     }
 
+    public void StartHeartbeat(string machineName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineName);
+        if (_stream is null)
+        {
+            throw new InvalidOperationException(
+                "Client chua ket noi Server.");
+        }
+
+        if (_heartbeatTask is not null)
+        {
+            throw new InvalidOperationException(
+                "Heartbeat da duoc khoi dong.");
+        }
+
+        _heartbeatCancellation = new CancellationTokenSource();
+        _heartbeatTask = RunHeartbeatAsync(
+            machineName.Trim(),
+            _heartbeatCancellation.Token);
+    }
+
+    private async Task RunHeartbeatAsync(
+        string machineName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(
+                    HeartbeatDefaults.Interval,
+                    cancellationToken);
+
+                var request = new NetworkMessage(
+                    Guid.NewGuid().ToString("N"),
+                    NetworkMessageTypes.MachineHeartbeat,
+                    machineName,
+                    null,
+                    JsonSerializer.SerializeToElement(
+                        new MachineHeartbeatRequest(DateTimeOffset.UtcNow)));
+                NetworkMessage response = await SendRequestAsync(
+                    request,
+                    cancellationToken);
+                SessionResult<MachineHeartbeatAck>? result =
+                    response.Data.Deserialize<SessionResult<MachineHeartbeatAck>>(
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (response.Type != NetworkMessageTypes.CommandResult ||
+                    result?.IsSuccess != true)
+                {
+                    throw new InvalidDataException(
+                        result?.Message ?? "Server tu choi heartbeat.");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            // Heartbeat duoc dung khi dong hoac doi ket noi.
+        }
+        catch (Exception)
+            when (cancellationToken.IsCancellationRequested)
+        {
+            // Socket co the dong dong thoi voi heartbeat.
+        }
+        catch (Exception exception)
+        {
+            HeartbeatFailed?.Invoke(this, exception);
+        }
+    }
+
     // Giai phong ket noi
     public void Dispose()
     {
+        _heartbeatCancellation?.Cancel();
+        _heartbeatCancellation?.Dispose();
+        _heartbeatCancellation = null;
         _stream?.Dispose();
         _client?.Dispose();
-        _requestLock.Dispose();
+        _stream = null;
+        _client = null;
     }
 }
 
