@@ -47,13 +47,16 @@ internal static class Program
             var handshakes = new MachineHandshakeService(
                 connectionString,
                 EnvironmentMachineKeyProvider.Create());
+            var heartbeats = new MachineHeartbeatService(connectionString);
             var usageSessions = new UsageSessionService(
                 connectionString,
                 hourlyRate);
 
             var authHandler = new AuthTcpHandler(
                 authentication.Authentication);
-            var machineHandler = new MachineTcpHandler(handshakes);
+            var machineHandler = new MachineTcpHandler(
+                handshakes,
+                heartbeats);
             var sessionHandler = new SessionTcpHandler(
                 usageSessions,
                 authentication.Authentication);

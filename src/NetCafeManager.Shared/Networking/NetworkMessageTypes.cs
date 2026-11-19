@@ -4,6 +4,7 @@ public static class NetworkMessageTypes
 {
     public const string MachineHandshakeBegin = "MACHINE_HANDSHAKE_BEGIN";
     public const string MachineHandshakeComplete = "MACHINE_HANDSHAKE_COMPLETE";
+    public const string MachineHeartbeat = "MACHINE_HEARTBEAT";
 
     public const string AuthLogin = "AUTH_LOGIN";
     public const string AuthLogout = "AUTH_LOGOUT";

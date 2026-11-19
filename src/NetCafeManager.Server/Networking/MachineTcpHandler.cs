@@ -11,11 +11,16 @@ public sealed class MachineTcpHandler
         new(JsonSerializerDefaults.Web);
 
     private readonly MachineHandshakeService _handshakes;
+    private readonly MachineHeartbeatService _heartbeats;
 
-    public MachineTcpHandler(MachineHandshakeService handshakes)
+    public MachineTcpHandler(
+        MachineHandshakeService handshakes,
+        MachineHeartbeatService heartbeats)
     {
         _handshakes = handshakes
             ?? throw new ArgumentNullException(nameof(handshakes));
+        _heartbeats = heartbeats
+            ?? throw new ArgumentNullException(nameof(heartbeats));
     }
 
     public async Task<NetworkMessage?> HandleAsync(
@@ -37,6 +42,8 @@ public sealed class MachineTcpHandler
                     context,
                     remoteIpAddress,
                     cancellationToken),
+            NetworkMessageTypes.MachineHeartbeat =>
+                await HeartbeatAsync(request, context, cancellationToken),
             _ => null
         };
     }
@@ -107,10 +114,65 @@ public sealed class MachineTcpHandler
                 cancellationToken);
         if (result.IsSuccess && result.Value is not null)
         {
-            context.VerifiedMachine = result.Value;
+            context.SetVerifiedMachine(
+                result.Value,
+                result.Value.VerifiedAt);
         }
 
         return NetworkResponseFactory.Result(request, result);
+    }
+
+    private async Task<NetworkMessage> HeartbeatAsync(
+        NetworkMessage request,
+        TcpConnectionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.VerifiedMachine is null)
+        {
+            return NetworkResponseFactory.Error(
+                request,
+                "HEARTBEAT_MACHINE_REQUIRED",
+                "May tram phai hoan tat handshake truoc khi gui heartbeat.");
+        }
+
+        MachineHeartbeatRequest? payload;
+        try
+        {
+            payload = request.Data.Deserialize<MachineHeartbeatRequest>(
+                JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return InvalidRequest(request);
+        }
+
+        if (payload is null)
+        {
+            return InvalidRequest(request);
+        }
+
+        SessionResult<MachineHeartbeatAck> result =
+            await _heartbeats.RecordAsync(
+                context.VerifiedMachine,
+                cancellationToken);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            context.MarkHeartbeat(result.Value.ReceivedAt);
+        }
+
+        return NetworkResponseFactory.Result(request, result);
+    }
+
+    public Task MarkDisconnectedAsync(
+        TcpConnectionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.VerifiedMachine is null
+            ? Task.CompletedTask
+            : _heartbeats.MarkDisconnectedAsync(
+                context.VerifiedMachine,
+                cancellationToken);
     }
 
     private static NetworkMessage InvalidRequest(NetworkMessage request) =>

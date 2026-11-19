@@ -28,6 +28,7 @@ byte[] otpSecret = RandomNumberGenerator.GetBytes(32);
 byte[] machineKey = RandomNumberGenerator.GetBytes(32);
 string suffix = Guid.NewGuid().ToString("N")[..8];
 string machineName = $"NET-SMOKE-{suffix}";
+string secondMachineName = $"NET-SMOKE-SECOND-{suffix}";
 string username = $"network-{suffix}";
 string password = "MatKhau!123";
 string newPassword = "MatKhau!456";
@@ -52,11 +53,16 @@ var computer = new Computer
     Name = machineName,
     Status = ComputerStatuses.Available
 };
+var secondComputer = new Computer
+{
+    Name = secondMachineName,
+    Status = ComputerStatuses.Available
+};
 
 await using (var db = new NetCafeDbContext(options))
 {
     db.Accounts.Add(account);
-    db.Computers.Add(computer);
+    db.Computers.AddRange(computer, secondComputer);
     await db.SaveChangesAsync();
 }
 
@@ -73,7 +79,12 @@ try
         new DictionaryMachineKeyProvider(
             new Dictionary<string, byte[]> { [machineName] = machineKey }),
         clock);
-    var machineHandler = new MachineTcpHandler(machineService);
+    var heartbeatService = new MachineHeartbeatService(
+        connectionString,
+        clock);
+    var machineHandler = new MachineTcpHandler(
+        machineService,
+        heartbeatService);
     var authHandler = new AuthTcpHandler(services.Authentication);
     var sessionHandler = new SessionTcpHandler(
         new UsageSessionService(connectionString, 12_000m, clock),
@@ -119,6 +130,49 @@ try
     Require(verified.IsSuccess && context.VerifiedMachine is not null,
         "TCP phải lưu máy đã xác thực trong ngữ cảnh kết nối.");
 
+    NetworkMessage heartbeatResponse = (await machineHandler.HandleAsync(
+        Message(
+            NetworkMessageTypes.MachineHeartbeat,
+            new MachineHeartbeatRequest(clock.GetUtcNow())),
+        context,
+        "127.0.0.1"))!;
+    SessionResult<MachineHeartbeatAck> heartbeat =
+        Deserialize<SessionResult<MachineHeartbeatAck>>(heartbeatResponse);
+    Require(
+        heartbeat.IsSuccess &&
+        heartbeat.Value?.NextHeartbeatAfterSeconds == 5 &&
+        context.LastHeartbeatReceivedAt == clock.GetUtcNow(),
+        "Server phai ACK heartbeat va cap nhat moc thoi gian tren ket noi.");
+
+    var secondVerified = new VerifiedMachine(
+        secondComputer.Id,
+        secondComputer.Name,
+        clock.GetUtcNow(),
+        clock.GetUtcNow().AddHours(8));
+    SessionResult<MachineHeartbeatAck>[] parallelHeartbeats = await Task.WhenAll(
+        heartbeatService.RecordAsync(context.VerifiedMachine!),
+        heartbeatService.RecordAsync(secondVerified));
+    Require(
+        parallelHeartbeats.All(result => result.IsSuccess),
+        "Hai may tram phai cap nhat heartbeat doc lap khi chay dong thoi.");
+    Require(
+        HeartbeatTimeoutPolicy.IsTimedOut(
+            context.LastHeartbeatReceivedAt,
+            clock.GetUtcNow().AddSeconds(16),
+            HeartbeatDefaults.Timeout),
+        "Ket noi phai bi xem la timeout sau hon 15 giay khong co heartbeat.");
+    await heartbeatService.MarkDisconnectedAsync(secondVerified);
+    await using (var db = new NetCafeDbContext(options))
+    {
+        string secondStatus = await db.Computers
+            .Where(row => row.Id == secondComputer.Id)
+            .Select(row => row.Status)
+            .SingleAsync();
+        Require(
+            secondStatus == ComputerStatuses.Disconnected,
+            "May mat heartbeat phai duoc danh dau MatKetNoi.");
+    }
+
     NetworkMessage loginResponse = (await authHandler.HandleAsync(
         Message(
             NetworkMessageTypes.AuthLogin,
@@ -151,6 +205,28 @@ try
         ended.Value?.UsageCost == 6_000m &&
         context.ActiveUsageSession is null,
         "Kết thúc phiên qua TCP phải tính tiền đúng và xóa trạng thái phiên.");
+
+    NetworkMessage restartResponse = (await sessionHandler.HandleAsync(
+        Message(NetworkMessageTypes.SessionStart, new { }),
+        context))!;
+    SessionResult<UsageSessionSummary> restarted =
+        Deserialize<SessionResult<UsageSessionSummary>>(restartResponse);
+    Require(
+        restarted.IsSuccess && context.ActiveUsageSession is not null,
+        "Phai mo duoc phien thu hai de kiem tra ngat ket noi.");
+    await sessionHandler.EndOnDisconnectAsync(context, "MatKetNoi");
+    await machineHandler.MarkDisconnectedAsync(context);
+    await using (var db = new NetCafeDbContext(options))
+    {
+        string disconnectedStatus = await db.Computers
+            .Where(row => row.Id == computer.Id)
+            .Select(row => row.Status)
+            .SingleAsync();
+        Require(
+            context.ActiveUsageSession is null &&
+            disconnectedStatus == ComputerStatuses.Disconnected,
+            "Ngat ket noi phai ket thuc phien va danh dau may MatKetNoi.");
+    }
 
     NetworkMessage otpRequestResponse = (await otpHandler.HandleAsync(
         Message(

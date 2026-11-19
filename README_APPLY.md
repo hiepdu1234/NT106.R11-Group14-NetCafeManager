@@ -1,41 +1,43 @@
 # Cách áp dụng bằng GitHub Desktop
 
-Gói này chứa 12 tệp đã sửa đầy đủ cho nhánh
-`fix/business-data-hardening`.
+Gói này được tạo từ `main` tại commit `1cd106b` và đã tích hợp phần hoàn tiền có
+kiểm soát cùng heartbeat vào đúng project gốc. Các thay đổi xác thực của PR #24
+và mua sản phẩm của PR #25 vẫn được giữ nguyên.
 
-## Áp dụng
+## Cách áp dụng
 
-1. Trong GitHub Desktop, xác nhận **Current branch** là
-   `fix/business-data-hardening`.
-2. Mở thư mục repository bằng **Repository > Show in Explorer**.
-3. Sao chép toàn bộ thư mục con trong gói này vào thư mục gốc repository và chọn
-   **Replace the files in the destination**.
-4. Không thay hoặc khôi phục `database/migrations/001_initial_schema.sql`; tệp đó
-   không nằm trong gói vì đang có thay đổi riêng của bạn.
-5. Quay lại GitHub Desktop, kiểm tra danh sách thay đổi trước khi commit.
+1. Trong GitHub Desktop, chọn repository `NT106.R11-Group14-NetCafeManager`.
+2. Fetch và pull `main` mới nhất.
+3. Tạo branch mới: `fix/refund-heartbeat-root-integration`.
+4. Chọn **Repository > Show in Explorer**.
+5. Xóa thư mục sai `NetCafeManager-refund-heartbeat-full` đang nằm trong repository.
+6. Sao chép toàn bộ nội dung đã giải nén của gói này vào thư mục gốc repository và
+   chọn thay thế các tệp trùng tên.
+7. Quay lại GitHub Desktop, kiểm tra thay đổi rồi tự commit và push.
 
 ## Nội dung chính
 
-- Bỏ trạng thái `CongNo`, giữ mô hình trả trước.
-- Xác nhận hóa đơn không trừ số dư lần hai và có tính idempotent.
-- Tạm khóa giảm giá khác 0 cho đến khi tích hợp vào transaction tính tiền.
-- Thêm `sp_getapplock` cho nạp tiền đồng thời.
-- Thêm migration `003_prepaid_invoice_policy.sql`.
-- Cập nhật smoke test hóa đơn và nạp tiền đồng thời.
-- Sửa ba workflow để chạy migration 001 -> 002 -> 003 -> seed.
+- Thêm migration `004_balance_refund.sql`.
+- Hoàn toàn bộ số dư do nhân viên/quản trị thực hiện, có `CommandId` chống gửi
+  trùng và khóa tài khoản sau khi hoàn tiền.
+- Ghi lịch sử hoàn tiền và bảo vệ transaction khi có yêu cầu đồng thời.
+- Client gửi heartbeat định kỳ sau khi xác thực máy.
+- Server trả ACK, theo dõi heartbeat cuối và ngắt kết nối khi timeout.
+- Kết thúc phiên sử dụng, đăng xuất và cập nhật trạng thái máy khi mất kết nối.
+- Giữ nguyên phần xác thực của PR #24 và Product Purchase của PR #25.
+- Thêm smoke test và GitHub Actions cho refund/heartbeat.
 
 ## Kiểm tra trước khi push
 
 ```powershell
-dotnet build src/NetCafeManager.Server/NetCafeManager.Server.csproj --configuration Release --no-restore
-dotnet build tests/NetCafeManager.InvoiceSmoke/NetCafeManager.InvoiceSmoke.csproj --configuration Release --no-restore
-dotnet build tests/NetCafeManager.BillingSmoke/NetCafeManager.BillingSmoke.csproj --configuration Release --no-restore
+dotnet build NetCafeManager.sln --configuration Release
+dotnet build tests/NetCafeManager.RefundSmoke --configuration Release
+dotnet build tests/NetCafeManager.NetworkIntegrationSmoke --configuration Release
 ```
 
-Các project trên đã build thành công trong bản kiểm tra. BillingSmoke có một cảnh
-báo xung đột phiên bản `System.Formats.Asn1` do dependency hiện có, nhưng không có
-lỗi biên dịch.
+Hai smoke test chạy đầy đủ khi có SQL Server và connection string tương ứng.
+GitHub Actions sẽ tự tạo SQL Server container, chạy migration rồi thực thi test.
 
 ## Commit gợi ý
 
-`fix: enforce prepaid invoice and harden concurrent top-up`
+`fix: integrate controlled refund and heartbeat into root project`

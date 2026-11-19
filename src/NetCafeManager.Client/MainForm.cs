@@ -715,6 +715,7 @@ public sealed class MainForm : Form
 
         int port = ReadServerPort();
         var client = new TcpClientAgent();
+        client.HeartbeatFailed += HandleHeartbeatFailure;
         try
         {
             await client.ConnectAsync(host, port, cancellationToken);
@@ -757,6 +758,30 @@ public sealed class MainForm : Form
         NetworkMessage response = await SendAsync(type, payload, cancellationToken);
         return response.Data.Deserialize<T>(JsonOptions)
                ?? throw new InvalidDataException("Server trả dữ liệu không hợp lệ.");
+    }
+
+    private void HandleHeartbeatFailure(
+        TcpClientAgent failedClient,
+        Exception exception)
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        BeginInvoke(new Action(() =>
+        {
+            if (!ReferenceEquals(_client, failedClient))
+            {
+                return;
+            }
+
+            ResetConnection();
+            ShowPage("login");
+            SetStatus(
+                "Da mat ket noi heartbeat voi Server. Hay xac thuc may lai.",
+                error: true);
+        }));
     }
 
     private void ResetConnection()
@@ -844,6 +869,7 @@ public sealed class MainForm : Form
                 throw new InvalidOperationException(completed.Message);
 
             _machineVerified = true;
+            _client!.StartHeartbeat(completed.Value.MachineName);
             _machineStatus.Text = $"Đã xác thực: {completed.Value.MachineName}";
             _settings = DesktopSettings.Create(
                 _serverHost.Text,
