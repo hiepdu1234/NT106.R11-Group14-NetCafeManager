@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/refund-heartbeat-hardening
+      - fix/network-resilience-root-integration
   pull_request:
     paths:
       - .github/workflows/check-refund-heartbeat.yml
@@ -20,6 +21,7 @@ on:
       - src/NetCafeManager.Shared/Sessions/**
       - tests/NetCafeManager.RefundSmoke/**
       - tests/NetCafeManager.NetworkIntegrationSmoke/**
+      - tests/NetCafeManager.NetworkResilienceSmoke/**
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,19 @@ jobs:
       - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
       - run: dotnet build tests/NetCafeManager.RefundSmoke --configuration Release
       - run: dotnet build tests/NetCafeManager.NetworkIntegrationSmoke --configuration Release
+
+  network-resilience:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet run --project tests/NetCafeManager.NetworkResilienceSmoke --configuration Release
 
   sql-smoke:
     runs-on: ubuntu-latest
