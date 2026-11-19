@@ -54,7 +54,10 @@ public sealed class ProductPurchaseService
             return Fail("PURCHASE_ACCOUNT_UNAVAILABLE", "Tài khoản không tồn tại hoặc đã bị khóa.");
 
         UsageSession? session = await db.UsageSessions.SingleOrDefaultAsync(
-            x => x.Id == usageSessionId && x.AccountId == actor.Id && x.EndedAtUtc == null,
+            x => x.Id == usageSessionId
+              && x.AccountId == actor.Id
+              && x.EndedAtUtc == null
+              && x.Status == "DangSuDung",
             cancellationToken);
         if (session is null)
             return Fail("PURCHASE_SESSION_REQUIRED", "Không tìm thấy phiên sử dụng đang hoạt động của tài khoản.");
