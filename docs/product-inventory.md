@@ -30,5 +30,12 @@ GitHub Actions chạy smoke test trên SQL Server 2022 để kiểm tra phân qu
 - Server kiểm tra tài khoản còn hoạt động, phiên thuộc đúng tài khoản, sản phẩm còn kinh doanh, tồn kho và số dư.
 - Trong một transaction SQL Server `Serializable` và application lock theo sản phẩm, Server trừ số dư, trừ tồn kho và ghi `CHI_TIET_DICH_VU` cùng nhau. Nếu bất kỳ bước nào thất bại, transaction được rollback.
 - `CHI_TIET_DICH_VU` liên kết với phiên sử dụng hiện tại; `DonGiaApDung` lưu giá tại thời điểm mua và `ThanhTien` do cột computed hiện có tính.
+- Mỗi lần bấm mua tạo một `CommandId`. Nếu mất kết nối sau khi Server đã xử lý,
+  Client giữ lại mã này cho lần thử lại cùng sản phẩm và số lượng. Server trả lại
+  kết quả cũ, không trừ số dư hoặc tồn kho lần thứ hai.
+- `CommandId` được khóa và có unique index trong SQL Server. Nếu cùng mã lệnh bị
+  dùng cho tài khoản, sản phẩm hoặc số lượng khác, Server trả
+  `PURCHASE_COMMAND_CONFLICT`.
 
 Thông điệp TCP mới: `PRODUCT_LIST` và `PRODUCT_PURCHASE`.
+

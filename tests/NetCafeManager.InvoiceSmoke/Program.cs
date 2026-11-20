@@ -46,10 +46,14 @@ await using (var db = new NetCafeDbContext(options))
     ServiceItem item = await db.ServiceItems.FirstAsync(row => row.Type == "SanPham");
     db.ServiceUsages.Add(new ServiceUsage
     {
+        CommandId = Guid.NewGuid(),
         UsageSessionId = session.Id,
         ServiceItemId = item.Id,
         Quantity = 2,
-        UnitPriceApplied = item.UnitPrice
+        UnitPriceApplied = item.UnitPrice,
+        StockAfter = item.StockQuantity ?? 0,
+        BalanceAfter = customer.Balance,
+        PurchasedAtUtc = DateTime.UtcNow
     });
     await db.SaveChangesAsync();
     sessionId = session.Id;
@@ -142,3 +146,4 @@ static void Assert(bool condition, string message)
         throw new InvalidOperationException(message);
     }
 }
+

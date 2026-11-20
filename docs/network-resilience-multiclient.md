@@ -17,6 +17,8 @@ Nhanh nay bo sung kiem thu socket that, khong tao lai nghiep vu heartbeat.
 4. Client gui payload khong phai JSON; Server van tiep tuc lang nghe.
 5. Server dung roi khoi dong lai tren cung cong va nhan request moi.
 6. Ket noi da co heartbeat bi dong khi vuot timeout.
+7. `TcpClientAgent` phat hien Server dung, retry trong luc Server chua san sang,
+   ket noi lai tren cung cong va gui request thanh cong sau khi Server khoi dong.
 
 ## Chay kiem thu
 
@@ -24,8 +26,14 @@ Nhanh nay bo sung kiem thu socket that, khong tao lai nghiep vu heartbeat.
 dotnet run --project tests/NetCafeManager.NetworkResilienceSmoke --configuration Release
 ```
 
-Smoke test nay khong can SQL Server. GitHub Actions chay tren ca Windows va
-Ubuntu de kiem tra hanh vi socket tren hai he dieu hanh.
+Hai smoke test nay khong can SQL Server. GitHub Actions chay tren ca Windows va
+Ubuntu de kiem tra hanh vi socket va reconnect tren hai he dieu hanh. Project
+reconnect lien ket truc tiep cung ma nguon `TcpClientAgent.cs`, khong khoi dong
+giao dien WinForms:
+
+```powershell
+dotnet run --project tests/NetCafeManager.ClientReconnectSmoke --configuration Release
+```
 
 ## Tieu chi dat
 
@@ -35,3 +43,6 @@ Ubuntu de kiem tra hanh vi socket tren hai he dieu hanh.
 - Client moi van ket noi duoc sau TCP reset va sau frame sai.
 - Server bind lai duoc cung cong sau khi restart.
 - Ket noi heartbeat qua han bi dong va context duoc danh dau timeout.
+- Client khong tiep tuc dung socket cu sau khi Server dung va ket noi lai duoc
+  sau khi Server san sang tro lai.
+
