@@ -73,9 +73,15 @@ static X509Certificate2 CreateServerCertificate()
             X509KeyUsageFlags.DigitalSignature |
             X509KeyUsageFlags.KeyEncipherment,
             critical: true));
-    return request.CreateSelfSigned(
+    using X509Certificate2 generated = request.CreateSelfSigned(
         DateTimeOffset.UtcNow.AddMinutes(-5),
         DateTimeOffset.UtcNow.AddDays(1));
+    
+    return new X509Certificate2(
+        generated.Export(X509ContentType.Pfx),
+        (string?)null,
+        X509KeyStorageFlags.UserKeySet |
+        X509KeyStorageFlags.Exportable);
 }
 
 static async Task RequireTlsRejectionAsync(
