@@ -22,6 +22,7 @@ on:
       - tests/NetCafeManager.RefundSmoke/**
       - tests/NetCafeManager.NetworkIntegrationSmoke/**
       - tests/NetCafeManager.NetworkResilienceSmoke/**
+      - tests/NetCafeManager.ClientReconnectSmoke/**
   workflow_dispatch:
 
 permissions:
@@ -39,6 +40,7 @@ jobs:
       - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
       - run: dotnet build tests/NetCafeManager.RefundSmoke --configuration Release
       - run: dotnet build tests/NetCafeManager.NetworkIntegrationSmoke --configuration Release
+      - run: dotnet build tests/NetCafeManager.ClientReconnectSmoke --configuration Release
 
   network-resilience:
     strategy:
@@ -52,6 +54,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - run: dotnet run --project tests/NetCafeManager.NetworkResilienceSmoke --configuration Release
+      - run: dotnet run --project tests/NetCafeManager.ClientReconnectSmoke --configuration Release
 
   sql-smoke:
     runs-on: ubuntu-latest

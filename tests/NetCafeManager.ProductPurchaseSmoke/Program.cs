@@ -28,6 +28,7 @@ int successProductId;
 int balanceProductId;
 int stockProductId;
 int concurrentProductId;
+int idempotentProductId;
 int rollbackProductId;
 
 long activeSessionId;
@@ -91,6 +92,9 @@ await using (var db = new NetCafeDbContext(options))
     var concurrentProduct = NewProduct(
         $"Concurrent-{suffix}", 10_000m, 1);
 
+    var idempotentProduct = NewProduct(
+        $"Idempotent-{suffix}", 5_000m, 5);
+
     var rollbackProduct = NewProduct(
         $"Rollback-{suffix}", 10_000m, 3);
 
@@ -99,6 +103,7 @@ await using (var db = new NetCafeDbContext(options))
         balanceProduct,
         stockProduct,
         concurrentProduct,
+        idempotentProduct,
         rollbackProduct
     );
 
@@ -108,6 +113,7 @@ await using (var db = new NetCafeDbContext(options))
     balanceProductId = balanceProduct.Id;
     stockProductId = stockProduct.Id;
     concurrentProductId = concurrentProduct.Id;
+    idempotentProductId = idempotentProduct.Id;
     rollbackProductId = rollbackProduct.Id;
 }
 
@@ -133,10 +139,11 @@ var service = new ProductPurchaseService(connectionString);
 // TEST 1: MUA THANH CONG
 // ============================================
 
+Guid successCommandId = Guid.NewGuid();
 var success = await service.PurchaseAsync(
     client,
     activeSessionId,
-    new PurchaseProductRequest(successProductId, 2)
+    new PurchaseProductRequest(successProductId, 2, successCommandId)
 );
 
 Assert(success.IsSuccess, "Mua hang phai thanh cong.");
@@ -161,6 +168,9 @@ await using (var db = new NetCafeDbContext(options))
 
     Assert(detail!.UsageSessionId == activeSessionId,
         "Sai phien su dung.");
+
+    Assert(detail.CommandId == successCommandId,
+        "Khong luu CommandId cua giao dich mua hang.");
 
     Assert(detail.ServiceItemId == successProductId,
         "Sai san pham.");
@@ -220,7 +230,7 @@ Console.WriteLine("[PASS] Khong du hang.");
 var ended = await service.PurchaseAsync(
     client,
     endedSessionId,
-    new PurchaseProductRequest(successProductId, 1)
+    new PurchaseProductRequest(successProductId, 1, Guid.NewGuid())
 );
 
 Assert(
@@ -238,7 +248,7 @@ Console.WriteLine("[PASS] Tu choi phien da ket thuc.");
 var wrongOwner = await service.PurchaseAsync(
     otherClient,
     activeSessionId,
-    new PurchaseProductRequest(successProductId, 1)
+    new PurchaseProductRequest(successProductId, 1, Guid.NewGuid())
 );
 
 Assert(
@@ -256,7 +266,7 @@ Console.WriteLine("[PASS] Tu choi phien khong thuoc khach hang.");
 var forbidden = await service.PurchaseAsync(
     admin,
     activeSessionId,
-    new PurchaseProductRequest(successProductId, 1)
+    new PurchaseProductRequest(successProductId, 1, Guid.NewGuid())
 );
 
 Assert(
@@ -278,13 +288,13 @@ var results = await Task.WhenAll(
     service.PurchaseAsync(
         client,
         activeSessionId,
-        new PurchaseProductRequest(concurrentProductId, 1)
+        new PurchaseProductRequest(concurrentProductId, 1, Guid.NewGuid())
     ),
 
     service.PurchaseAsync(
         client,
         activeSessionId,
-        new PurchaseProductRequest(concurrentProductId, 1)
+        new PurchaseProductRequest(concurrentProductId, 1, Guid.NewGuid())
     )
 );
 
@@ -315,7 +325,71 @@ await using (var db = new NetCafeDbContext(options))
 Console.WriteLine("[PASS] Kiem tra mua hang dong thoi.");
 
 // ============================================
-// TEST 8: ROLLBACK KHI TRANSACTION LOI
+// TEST 8: GUI TRUNG COMMANDID KHONG TRU HAI LAN
+// ============================================
+
+Guid duplicateCommandId = Guid.NewGuid();
+var duplicateRequest = new PurchaseProductRequest(
+    idempotentProductId,
+    2,
+    duplicateCommandId);
+
+InventoryResult<ProductPurchaseReceipt>[] duplicateResults = await Task.WhenAll(
+    service.PurchaseAsync(client, activeSessionId, duplicateRequest),
+    service.PurchaseAsync(client, activeSessionId, duplicateRequest));
+
+Assert(
+    duplicateResults.All(result => result.IsSuccess && result.Value is not null),
+    "Hai lan gui cung CommandId phai tra ket qua thanh cong cu.");
+Assert(
+    duplicateResults.Select(result => result.Value!.DetailId).Distinct().Count() == 1,
+    "Gui trung CommandId phai tra cung mot chi tiet dich vu.");
+
+var retry = await service.PurchaseAsync(
+    client,
+    activeSessionId,
+    duplicateRequest);
+Assert(
+    retry.IsSuccess &&
+    retry.Value!.DetailId == duplicateResults[0].Value!.DetailId &&
+    retry.Value.RemainingBalance == 60_000m &&
+    retry.Value.RemainingStock == 3,
+    "Retry phai tra dung snapshot cua giao dich da xu ly.");
+
+var conflictingRetry = await service.PurchaseAsync(
+    client,
+    activeSessionId,
+    duplicateRequest with { Quantity = 1 });
+Assert(
+    !conflictingRetry.IsSuccess &&
+    conflictingRetry.ErrorCode == "PURCHASE_COMMAND_CONFLICT",
+    "Khong duoc tai su dung CommandId voi noi dung khac.");
+
+await using (var db = new NetCafeDbContext(options))
+{
+    int detailCount = await db.ServiceUsages.CountAsync(
+        row => row.CommandId == duplicateCommandId);
+    int stock = await db.ServiceItems
+        .Where(row => row.Id == idempotentProductId)
+        .Select(row => row.StockQuantity!.Value)
+        .SingleAsync();
+    decimal balance = await db.Accounts
+        .Where(row => row.Id == clientId)
+        .Select(row => row.Balance)
+        .SingleAsync();
+
+    Assert(detailCount == 1,
+        "Gui trung CommandId chi duoc tao mot chi tiet dich vu.");
+    Assert(stock == 3,
+        "Gui trung CommandId khong duoc tru ton kho lan hai.");
+    Assert(balance == 60_000m,
+        "Gui trung CommandId khong duoc tru so du lan hai.");
+}
+
+Console.WriteLine("[PASS] Chong gui trung CommandId khi mua hang.");
+
+// ============================================
+// TEST 9: ROLLBACK KHI TRANSACTION LOI
 // ============================================
 
 // Tao trigger tam thoi de co tinh gay loi
@@ -356,7 +430,7 @@ try
     await service.PurchaseAsync(
         client,
         activeSessionId,
-        new PurchaseProductRequest(rollbackProductId, 1)
+        new PurchaseProductRequest(rollbackProductId, 1, Guid.NewGuid())
     );
 }
 catch
@@ -395,7 +469,7 @@ await using (var db = new NetCafeDbContext(options))
     Assert(stock == 3,
         "Rollback khong khoi phuc ton kho.");
 
-    Assert(balance == 70_000m,
+    Assert(balance == 60_000m,
         "Rollback khong khoi phuc so du.");
 
     Assert(detailCount == 0,
@@ -483,7 +557,7 @@ static async Task AssertRejectedWithoutChanges(
     var result = await service.PurchaseAsync(
         actor,
         sessionId,
-        new PurchaseProductRequest(productId, quantity)
+        new PurchaseProductRequest(productId, quantity, Guid.NewGuid())
     );
 
     Assert(!result.IsSuccess, "Giao dich phai bi tu choi.");
