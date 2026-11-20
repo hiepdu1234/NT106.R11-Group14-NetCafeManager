@@ -15,7 +15,9 @@ internal sealed record DesktopSettings(
     int ServerPort,
     WorkstationMode Mode,
     string MachineName,
-    string? ProtectedMachineKey)
+    string? ProtectedMachineKey,
+    bool UseTls = false,
+    string? ServerCertificateSha256 = null)
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -33,6 +35,8 @@ internal sealed record DesktopSettings(
         5050,
         WorkstationMode.Client,
         Environment.MachineName,
+        null,
+        false,
         null);
 
     public static DesktopSettings Load()
@@ -64,7 +68,9 @@ internal sealed record DesktopSettings(
         int serverPort,
         WorkstationMode mode,
         string machineName,
-        string machineKeyBase64)
+        string machineKeyBase64,
+        bool useTls,
+        string? serverCertificateSha256)
     {
         string protectedKey = Protect(machineKeyBase64.Trim());
         return new DesktopSettings(
@@ -72,7 +78,11 @@ internal sealed record DesktopSettings(
             serverPort,
             mode,
             machineName.Trim(),
-            protectedKey);
+            protectedKey,
+            useTls,
+            string.IsNullOrWhiteSpace(serverCertificateSha256)
+                ? null
+                : serverCertificateSha256.Trim());
     }
 
     public void Save()
@@ -121,13 +131,27 @@ internal sealed record DesktopSettings(
         }
     }
 
-    private bool IsValid() =>
-        !string.IsNullOrWhiteSpace(ServerHost) &&
-        ServerHost.Length <= 253 &&
-        ServerPort is >= 1 and <= 65535 &&
-        Enum.IsDefined(Mode) &&
-        !string.IsNullOrWhiteSpace(MachineName) &&
-        MachineName.Length <= 50;
+    private bool IsValid()
+    {
+        if (string.IsNullOrWhiteSpace(ServerHost) ||
+            ServerHost.Length > 253 ||
+            ServerPort is < 1 or > 65535 ||
+            !Enum.IsDefined(Mode) ||
+            string.IsNullOrWhiteSpace(MachineName) ||
+            MachineName.Length > 50)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(ServerCertificateSha256))
+        {
+            return true;
+        }
+
+        string normalized = string.Concat(
+            ServerCertificateSha256.Where(Uri.IsHexDigit));
+        return UseTls && normalized.Length == 64;
+    }
 
     private static string Protect(string value)
     {

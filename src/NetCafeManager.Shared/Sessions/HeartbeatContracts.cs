@@ -11,4 +11,13 @@ public sealed record MachineHeartbeatRequest(DateTimeOffset SentAt);
 public sealed record MachineHeartbeatAck(
     int ComputerId,
     DateTimeOffset ReceivedAt,
-    int NextHeartbeatAfterSeconds);
+    int NextHeartbeatAfterSeconds,
+    SessionBalanceStatus? BalanceStatus = null);
+
+public sealed record SessionBalanceStatus(
+    bool HasActiveSession,
+    bool ShouldWarn,
+    bool SessionEnded,
+    decimal RemainingBalance,
+    TimeSpan EstimatedRemaining,
+    string Message);

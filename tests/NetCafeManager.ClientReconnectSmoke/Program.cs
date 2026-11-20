@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using NetCafeManager.Client.Networking;
 using NetCafeManager.Shared.Networking;
@@ -33,9 +37,73 @@ await using SmokeServer restartedServer = await SmokeServer.StartAsync(port);
 await reconnectTask.WaitAsync(TimeSpan.FromSeconds(5));
 await RequireRoundTripAsync(reconnectingClient, "after-restart");
 
+using X509Certificate2 certificate = CreateServerCertificate();
+await using SmokeServer tlsServer = await SmokeServer.StartAsync(
+    certificate: certificate);
+await using var tlsClient = new TcpClientAgent();
+await tlsClient.ConnectAsync(
+    IPAddress.Loopback.ToString(),
+    tlsServer.Port,
+    useTls: true,
+    expectedCertificateSha256:
+        certificate.GetCertHashString(HashAlgorithmName.SHA256));
+await RequireRoundTripAsync(tlsClient, "tls-round-trip");
+
+await using var rejectedTlsClient = new TcpClientAgent();
+await RequireTlsRejectionAsync(rejectedTlsClient, tlsServer.Port);
+
 Console.WriteLine(
     "Client reconnect smoke passed: phat hien mat ket noi, retry khi Server " +
-    "dang dung va gui request thanh cong sau khi Server khoi dong lai.");
+    "dang dung, gui request sau khi Server khoi dong lai va xac minh TLS SHA-256.");
+
+static X509Certificate2 CreateServerCertificate()
+{
+    using RSA rsa = RSA.Create(2048);
+    var request = new CertificateRequest(
+        "CN=localhost",
+        rsa,
+        HashAlgorithmName.SHA256,
+        RSASignaturePadding.Pkcs1);
+    var names = new SubjectAlternativeNameBuilder();
+    names.AddDnsName("localhost");
+    names.AddIpAddress(IPAddress.Loopback);
+    request.CertificateExtensions.Add(names.Build());
+    request.CertificateExtensions.Add(
+        new X509KeyUsageExtension(
+            X509KeyUsageFlags.DigitalSignature |
+            X509KeyUsageFlags.KeyEncipherment,
+            critical: true));
+    using X509Certificate2 generated = request.CreateSelfSigned(
+        DateTimeOffset.UtcNow.AddMinutes(-5),
+        DateTimeOffset.UtcNow.AddDays(1));
+    
+    return new X509Certificate2(
+        generated.Export(X509ContentType.Pfx),
+        (string?)null,
+        X509KeyStorageFlags.UserKeySet |
+        X509KeyStorageFlags.Exportable);
+}
+
+static async Task RequireTlsRejectionAsync(
+    TcpClientAgent client,
+    int port)
+{
+    try
+    {
+        await client.ConnectAsync(
+            IPAddress.Loopback.ToString(),
+            port,
+            useTls: true,
+            expectedCertificateSha256: new string('0', 64));
+    }
+    catch (AuthenticationException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(
+        "Client phai tu choi Server co SHA-256 khong khop.");
+}
 
 static async Task ConnectWithRetryAsync(
     TcpClientAgent client,
@@ -118,22 +186,28 @@ internal sealed class SmokeServer : IAsyncDisposable
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly ConcurrentDictionary<TcpClient, byte> _clients = new();
+    private readonly X509Certificate2? _certificate;
     private readonly Task _runTask;
     private int _stopped;
 
-    private SmokeServer(TcpListener listener)
+    private SmokeServer(
+        TcpListener listener,
+        X509Certificate2? certificate)
     {
         _listener = listener;
+        _certificate = certificate;
         _runTask = RunAsync();
     }
 
     public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
-    public static Task<SmokeServer> StartAsync(int port = 0)
+    public static Task<SmokeServer> StartAsync(
+        int port = 0,
+        X509Certificate2? certificate = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
-        return Task.FromResult(new SmokeServer(listener));
+        return Task.FromResult(new SmokeServer(listener, certificate));
     }
 
     private async Task RunAsync()
@@ -163,8 +237,26 @@ internal sealed class SmokeServer : IAsyncDisposable
         try
         {
             using (client)
-            using (NetworkStream stream = client.GetStream())
             {
+                Stream stream = client.GetStream();
+                if (_certificate is not null)
+                {
+                    var secureStream = new SslStream(stream, false);
+                    await secureStream.AuthenticateAsServerAsync(
+                        new SslServerAuthenticationOptions
+                        {
+                            ServerCertificate = _certificate,
+                            EnabledSslProtocols =
+                                SslProtocols.Tls12 | SslProtocols.Tls13,
+                            ClientCertificateRequired = false,
+                            CertificateRevocationCheckMode =
+                                X509RevocationMode.NoCheck
+                        });
+                    stream = secureStream;
+                }
+
+                using (stream)
+                {
                 while (!_lifetime.IsCancellationRequested)
                 {
                     NetworkMessage? request = await FrameProtocol.ReceiveAsync(
@@ -186,6 +278,7 @@ internal sealed class SmokeServer : IAsyncDisposable
                         response,
                         _lifetime.Token);
                 }
+                }
             }
         }
         catch (Exception) when (_lifetime.IsCancellationRequested)
@@ -195,6 +288,9 @@ internal sealed class SmokeServer : IAsyncDisposable
         {
         }
         catch (SocketException)
+        {
+        }
+        catch (AuthenticationException)
         {
         }
         finally

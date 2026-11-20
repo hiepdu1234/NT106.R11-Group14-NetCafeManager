@@ -1,6 +1,9 @@
 
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using NetCafeManager.Server.Authentication;
 using NetCafeManager.Shared.Networking;
 using NetCafeManager.Shared.Sessions;
@@ -15,6 +18,8 @@ internal sealed class TcpServer
     private readonly SessionTcpHandler? _sessionHandler;
     private readonly PasswordResetTcpHandler? _passwordResetHandler;
     private readonly ProductPurchaseTcpHandler? _productPurchaseHandler;
+    private readonly AdminOperationsTcpHandler? _adminOperationsHandler;
+    private readonly X509Certificate2? _serverCertificate;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _heartbeatTimeout;
     private readonly TimeSpan _heartbeatCheckInterval;
@@ -33,6 +38,8 @@ internal sealed class TcpServer
         SessionTcpHandler? sessionHandler = null,
         PasswordResetTcpHandler? passwordResetHandler = null,
         ProductPurchaseTcpHandler? productPurchaseHandler = null,
+        AdminOperationsTcpHandler? adminOperationsHandler = null,
+        X509Certificate2? serverCertificate = null,
         TimeProvider? timeProvider = null,
         TimeSpan? heartbeatTimeout = null,
         TimeSpan? heartbeatCheckInterval = null,
@@ -44,6 +51,8 @@ internal sealed class TcpServer
         _sessionHandler = sessionHandler;
         _passwordResetHandler = passwordResetHandler;
         _productPurchaseHandler = productPurchaseHandler;
+        _adminOperationsHandler = adminOperationsHandler;
+        _serverCertificate = serverCertificate;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _heartbeatTimeout = heartbeatTimeout ?? HeartbeatDefaults.Timeout;
         _heartbeatCheckInterval = heartbeatCheckInterval
@@ -120,36 +129,57 @@ internal sealed class TcpServer
 
             try
             {
-                using NetworkStream stream =
-                    client.GetStream();
-
-                while (!cancellationToken.IsCancellationRequested)
+                Stream stream = client.GetStream();
+                if (_serverCertificate is not null)
                 {
-                    NetworkMessage? request =
-                        await FrameProtocol.ReceiveAsync(
-                            stream,
+                    var secureStream = new SslStream(
+                        stream,
+                        leaveInnerStreamOpen: false);
+                    await secureStream.AuthenticateAsServerAsync(
+                        new SslServerAuthenticationOptions
+                        {
+                            ServerCertificate = _serverCertificate,
+                            ClientCertificateRequired = false,
+                            EnabledSslProtocols =
+                                SslProtocols.Tls12 | SslProtocols.Tls13,
+                            CertificateRevocationCheckMode =
+                                X509RevocationMode.NoCheck
+                        },
+                        connectionCancellation.Token);
+                    stream = secureStream;
+                }
+
+                using (stream)
+                {
+
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        NetworkMessage? request =
+                            await FrameProtocol.ReceiveAsync(
+                                stream,
+                                connectionCancellation.Token);
+
+                        // Client dong ket noi
+                        if (request is null)
+                        {
+                            break;
+                        }
+
+                        Console.WriteLine(
+                            $"Nhan thong diep: {request.Type}, ID: {request.Id}");
+
+                        NetworkMessage response = await DispatchAsync(
+                            request,
+                            context,
+                            remoteIpAddress,
                             connectionCancellation.Token);
 
-                    // Client dong ket noi
-                    if (request is null)
-                    {
-                        break;
+                        // Gui phan hoi cho Client
+                        await FrameProtocol.SendAsync(
+                            stream,
+                            response,
+                            connectionCancellation.Token);
                     }
-
-                    Console.WriteLine(
-                        $"Nhan thong diep: {request.Type}, ID: {request.Id}");
-
-                    NetworkMessage response = await DispatchAsync(
-                        request,
-                        context,
-                        remoteIpAddress,
-                        connectionCancellation.Token);
-
-                    // Gui phan hoi cho Client
-                    await FrameProtocol.SendAsync(
-                        stream,
-                        response,
-                        connectionCancellation.Token);
                 }
             }
             catch (OperationCanceledException)
@@ -314,6 +344,12 @@ internal sealed class TcpServer
         if (response is null && _productPurchaseHandler is not null)
         {
             response = await _productPurchaseHandler.HandleAsync(
+                request, context, cancellationToken);
+        }
+
+        if (response is null && _adminOperationsHandler is not null)
+        {
+            response = await _adminOperationsHandler.HandleAsync(
                 request, context, cancellationToken);
         }
 

@@ -19,6 +19,23 @@ public static class NetworkMessageTypes
     public const string ProductPurchase = "PRODUCT_PURCHASE";
     public const string ProductList = "PRODUCT_LIST";
 
+    public const string AdminCustomerList = "ADMIN_CUSTOMER_LIST";
+    public const string AdminCustomerCreate = "ADMIN_CUSTOMER_CREATE";
+    public const string AdminCustomerUpdate = "ADMIN_CUSTOMER_UPDATE";
+    public const string AdminHourPackageList = "ADMIN_HOUR_PACKAGE_LIST";
+    public const string AdminHourPackageSave = "ADMIN_HOUR_PACKAGE_SAVE";
+    public const string AdminTopUp = "ADMIN_TOP_UP";
+    public const string AdminTopUpHistory = "ADMIN_TOP_UP_HISTORY";
+    public const string AdminInventoryList = "ADMIN_INVENTORY_LIST";
+    public const string AdminInventorySave = "ADMIN_INVENTORY_SAVE";
+    public const string AdminInventoryAdjust = "ADMIN_INVENTORY_ADJUST";
+    public const string AdminInventoryDelete = "ADMIN_INVENTORY_DELETE";
+    public const string AdminInvoiceList = "ADMIN_INVOICE_LIST";
+    public const string AdminInvoiceCreate = "ADMIN_INVOICE_CREATE";
+    public const string AdminInvoiceSetStatus = "ADMIN_INVOICE_SET_STATUS";
+    public const string AdminRefundCreate = "ADMIN_REFUND_CREATE";
+    public const string AdminRefundHistory = "ADMIN_REFUND_HISTORY";
+
     public const string CommandResult = "COMMAND_RESULT";
     public const string Error = "ERROR";
 }

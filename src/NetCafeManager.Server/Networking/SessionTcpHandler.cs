@@ -85,6 +85,28 @@ public sealed class SessionTcpHandler
         }
     }
 
+    public async Task<SessionBalanceStatus?> EvaluateBalanceOnHeartbeatAsync(
+        TcpConnectionContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.User is null || context.ActiveUsageSession is null)
+        {
+            return null;
+        }
+
+        SessionBalanceStatus status = await _sessions.EvaluateBalanceAsync(
+            context.User,
+            context.ActiveUsageSession.SessionId,
+            cancellationToken);
+        if (status.SessionEnded || !status.HasActiveSession)
+        {
+            context.ActiveUsageSession = null;
+        }
+
+        return status;
+    }
+
     private async Task<NetworkMessage> StartAsync(
         NetworkMessage request,
         TcpConnectionContext context,

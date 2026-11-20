@@ -1,4 +1,8 @@
 using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using NetCafeManager.Shared.Networking;
 using NetCafeManager.Shared.Sessions;
@@ -8,7 +12,7 @@ namespace NetCafeManager.Client.Networking;
 internal sealed class TcpClientAgent : IAsyncDisposable
 {
     private TcpClient? _client;
-    private NetworkStream? _stream;
+    private Stream? _stream;
 
     private readonly SemaphoreSlim _requestLock = new(1, 1);
     private readonly object _disposeSync = new();
@@ -19,13 +23,16 @@ internal sealed class TcpClientAgent : IAsyncDisposable
     private int _disposeStarted;
 
     public event Action<TcpClientAgent, Exception>? HeartbeatFailed;
+    public event Action<TcpClientAgent, SessionBalanceStatus>? BalanceStatusChanged;
 
     public bool IsDisposed => Volatile.Read(ref _disposeStarted) == 1;
 
     public async Task ConnectAsync(
         string serverIp,
         int port,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool useTls = false,
+        string? expectedCertificateSha256 = null)
     {
         ObjectDisposedException.ThrowIf(IsDisposed, this);
 
@@ -42,7 +49,31 @@ internal sealed class TcpClientAgent : IAsyncDisposable
                 .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             ObjectDisposedException.ThrowIf(IsDisposed, this);
-            _stream = client.GetStream();
+            Stream stream = client.GetStream();
+            if (useTls)
+            {
+                string? expected = NormalizeThumbprint(expectedCertificateSha256);
+                var secureStream = new SslStream(
+                    stream,
+                    leaveInnerStreamOpen: false,
+                    (_, certificate, _, policyErrors) =>
+                        ValidateServerCertificate(
+                            certificate,
+                            policyErrors,
+                            expected));
+                await secureStream.AuthenticateAsClientAsync(
+                    new SslClientAuthenticationOptions
+                    {
+                        TargetHost = serverIp,
+                        EnabledSslProtocols =
+                            SslProtocols.Tls12 | SslProtocols.Tls13,
+                        CertificateRevocationCheckMode =
+                            X509RevocationMode.NoCheck
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                stream = secureStream;
+            }
+            _stream = stream;
         }
         catch
         {
@@ -62,7 +93,7 @@ internal sealed class TcpClientAgent : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(IsDisposed, this);
-            NetworkStream stream = _stream
+            Stream stream = _stream
                 ?? throw new InvalidOperationException("Client chưa kết nối Server.");
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
@@ -147,6 +178,11 @@ internal sealed class TcpClientAgent : IAsyncDisposable
                     throw new InvalidDataException(
                         result?.Message ?? "Server từ chối heartbeat.");
                 }
+
+                if (result.Value?.BalanceStatus is { } balanceStatus)
+                {
+                    BalanceStatusChanged?.Invoke(this, balanceStatus);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -178,6 +214,47 @@ internal sealed class TcpClientAgent : IAsyncDisposable
             _disposeTask ??= DisposeCoreAsync();
             return new ValueTask(_disposeTask);
         }
+    }
+
+    private static bool ValidateServerCertificate(
+        X509Certificate? certificate,
+        SslPolicyErrors policyErrors,
+        string? expectedSha256)
+    {
+        if (certificate is null)
+        {
+            return false;
+        }
+
+        if (expectedSha256 is null)
+        {
+            return policyErrors == SslPolicyErrors.None;
+        }
+
+        using var certificate2 = new X509Certificate2(certificate);
+        string actual = NormalizeThumbprint(
+            certificate2.GetCertHashString(HashAlgorithmName.SHA256))!;
+        return CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(actual),
+            Convert.FromHexString(expectedSha256));
+    }
+
+    private static string? NormalizeThumbprint(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        string normalized = string.Concat(
+            value.Where(Uri.IsHexDigit)).ToUpperInvariant();
+        if (normalized.Length != 64)
+        {
+            throw new InvalidOperationException(
+                "Dấu vân tay chứng thư phải là SHA-256 gồm 64 ký tự hex.");
+        }
+
+        return normalized;
     }
 
     private async Task DisposeCoreAsync()

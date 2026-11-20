@@ -45,10 +45,9 @@ mã hóa bằng Windows DPAPI với phạm vi `CurrentUser`, không lưu dạng 
 - Administrator: Server thu hồi token đăng nhập; không tạo hoặc tính phí phiên sử dụng.
 - Sau khi Server xác nhận, Desktop quay lại màn hình đăng nhập chung.
 
-## Giới hạn của gói nền tảng này
+## Chức năng đã nối sau gói nền tảng
 
-Gói này thiết lập cấu hình thiết bị, đăng nhập chung và định tuyến hai giao diện.
-Các màn hình nghiệp vụ quản lý tài khoản, máy trạm, hóa đơn, số dư và tồn kho sẽ
-được nối vào giao diện quản trị ở các gói tiếp theo. Trước khi mở Server ra mạng
-LAN thật, kết nối TCP phải được bảo vệ bằng TLS và chứng thư Server phải được
-xác minh tại Desktop.
+Giao diện quản trị hiện đã có quản lý tài khoản, gói giờ/nạp tiền, hoàn tiền,
+hóa đơn và kho/sản phẩm qua TCP. Heartbeat cũng trả cảnh báo số dư và Server tự
+kết thúc phiên khi hết tiền. Chế độ LAN dùng TLS và xác minh SHA-256 chứng thư
+được hướng dẫn tại [admin-operations-tcp-ui.md](admin-operations-tcp-ui.md).

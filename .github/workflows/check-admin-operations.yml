@@ -1,0 +1,79 @@
+name: Check admin TCP UI integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/check-admin-operations.yml
+      - src/NetCafeManager.Client/**
+      - src/NetCafeManager.Server/**
+      - src/NetCafeManager.Shared/**
+      - src/NetCafeManager.Infrastructure/**
+      - tests/NetCafeManager.AdminOperationsSmoke/**
+      - database/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
+      - run: dotnet build tests/NetCafeManager.AdminOperationsSmoke --configuration Release -p:BuildInParallel=false
+
+  admin-operations-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: NetCafe_CI_2026!Only
+        ports:
+          - 1433:1433
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Wait for SQL Server and prepare database
+        shell: bash
+        run: |
+          set -euo pipefail
+          SQL_CONTAINER="${{ job.services.sqlserver.id }}"
+          ready=false
+          for attempt in {1..45}; do
+            if docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P 'NetCafe_CI_2026!Only' -C \
+              -Q 'SELECT 1' >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs "$SQL_CONTAINER"
+            exit 1
+          fi
+          docker exec "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'NetCafe_CI_2026!Only' -C -b \
+            -Q 'CREATE DATABASE [NetCafeManager_Admin_CI];'
+          for migration in database/migrations/*.sql; do
+            docker exec -i "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P 'NetCafe_CI_2026!Only' -C -b \
+              -d NetCafeManager_Admin_CI < "$migration"
+          done
+          docker exec -i "$SQL_CONTAINER" /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'NetCafe_CI_2026!Only' -C -b \
+            -d NetCafeManager_Admin_CI < database/seed/001_seed_core.sql
+      - name: Run admin TCP smoke test
+        env:
+          NETCAFE_ADMIN_SMOKE_CONNECTION: Server=127.0.0.1,1433;Database=NetCafeManager_Admin_CI;User ID=sa;Password=NetCafe_CI_2026!Only;Encrypt=True;TrustServerCertificate=True;
+        run: dotnet run --project tests/NetCafeManager.AdminOperationsSmoke --configuration Release

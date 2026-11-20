@@ -12,15 +12,18 @@ public sealed class MachineTcpHandler
 
     private readonly MachineHandshakeService _handshakes;
     private readonly MachineHeartbeatService _heartbeats;
+    private readonly SessionTcpHandler? _sessions;
 
     public MachineTcpHandler(
         MachineHandshakeService handshakes,
-        MachineHeartbeatService heartbeats)
+        MachineHeartbeatService heartbeats,
+        SessionTcpHandler? sessions = null)
     {
         _handshakes = handshakes
             ?? throw new ArgumentNullException(nameof(handshakes));
         _heartbeats = heartbeats
             ?? throw new ArgumentNullException(nameof(heartbeats));
+        _sessions = sessions;
     }
 
     public async Task<NetworkMessage?> HandleAsync(
@@ -158,6 +161,19 @@ public sealed class MachineTcpHandler
         if (result.IsSuccess && result.Value is not null)
         {
             context.MarkHeartbeat(result.Value.ReceivedAt);
+            if (_sessions is not null)
+            {
+                SessionBalanceStatus? balance =
+                    await _sessions.EvaluateBalanceOnHeartbeatAsync(
+                        context,
+                        cancellationToken);
+                if (balance is not null)
+                {
+                    result = SessionResult<MachineHeartbeatAck>.Success(
+                        result.Value with { BalanceStatus = balance },
+                        result.Message);
+                }
+            }
         }
 
         return NetworkResponseFactory.Result(request, result);
