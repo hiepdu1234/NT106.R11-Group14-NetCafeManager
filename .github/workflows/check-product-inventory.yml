@@ -56,11 +56,12 @@ jobs:
             sleep 2
           done
           sql -Q 'CREATE DATABASE [NetCafeManager_CI];' </dev/null
-          sql -d NetCafeManager_CI < database/migrations/001_initial_schema.sql
-          sql -d NetCafeManager_CI < database/migrations/002_business_data_hardening.sql
-          sql -d NetCafeManager_CI < database/migrations/003_prepaid_invoice_policy.sql
+          for migration in database/migrations/*.sql; do
+            sql -d NetCafeManager_CI < "$migration"
+          done
           sql -d NetCafeManager_CI < database/seed/001_seed_core.sql
           endpoint="$(docker port "$container_id" 1433/tcp)"
           port="${endpoint##*:}"
           export NETCAFE_INVENTORY_SMOKE_CONNECTION="Server=127.0.0.1,${port};Database=NetCafeManager_CI;User ID=sa;Password=${MSSQL_SA_PASSWORD};Encrypt=True;TrustServerCertificate=True;"
           dotnet run --project tests/NetCafeManager.InventorySmoke --configuration Release
+

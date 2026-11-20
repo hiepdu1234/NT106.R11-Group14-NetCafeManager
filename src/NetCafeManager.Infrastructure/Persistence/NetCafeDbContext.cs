@@ -254,6 +254,10 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
             entity.Property(detail => detail.Id)
                 .HasColumnName("MaCTDV")
                 .UseIdentityColumn();
+            entity.Property(detail => detail.CommandId)
+                .HasColumnName("CommandId")
+                .ValueGeneratedNever();
+            entity.HasIndex(detail => detail.CommandId).IsUnique();
             entity.Property(detail => detail.UsageSessionId).HasColumnName("MaPhien");
             entity.Property(detail => detail.ServiceItemId).HasColumnName("MaDV");
             entity.Property(detail => detail.Quantity).HasColumnName("SoLuong");
@@ -266,6 +270,14 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
                 .HasComputedColumnSql(
                     "CONVERT(decimal(12,2), [SoLuong] * [DonGiaApDung])",
                     stored: true);
+            entity.Property(detail => detail.StockAfter)
+                .HasColumnName("SoLuongTonSau");
+            entity.Property(detail => detail.BalanceAfter)
+                .HasColumnName("SoDuSauGiaoDich")
+                .HasPrecision(12, 2);
+            entity.Property(detail => detail.PurchasedAtUtc)
+                .HasColumnName("ThoiDiemMua")
+                .HasColumnType("datetime2");
 
             entity.HasOne(detail => detail.UsageSession)
                 .WithMany(session => session.ServiceUsages)
@@ -642,3 +654,4 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
         });
     }
 }
+
