@@ -171,6 +171,41 @@ Assert(!noBalance.IsSuccess &&
        noBalance.ErrorCode == "SESSION_INSUFFICIENT_BALANCE",
     "Tài khoản hết tiền không được bắt đầu phiên.");
 
+SessionResult<UsageSessionSummary> balanceSession = await sessions.StartAsync(
+    client2,
+    machine2);
+Assert(balanceSession.IsSuccess && balanceSession.Value is not null,
+    "Phải mở được phiên để kiểm tra cảnh báo và tự kết thúc khi hết tiền.");
+
+timeProvider.Advance(TimeSpan.FromMinutes(90));
+SessionBalanceStatus warning = await sessions.EvaluateBalanceAsync(
+    client2,
+    balanceSession.Value!.SessionId);
+Assert(
+    warning.HasActiveSession && warning.ShouldWarn &&
+    !warning.SessionEnded && warning.RemainingBalance == 2_000m,
+    "Khi còn 2.000 đồng, heartbeat phải cảnh báo nhưng chưa kết thúc phiên.");
+
+timeProvider.Advance(TimeSpan.FromMinutes(20));
+SessionBalanceStatus exhausted = await sessions.EvaluateBalanceAsync(
+    client2,
+    balanceSession.Value.SessionId);
+Assert(
+    exhausted.SessionEnded && !exhausted.HasActiveSession &&
+    exhausted.RemainingBalance == 0m,
+    "Khi chi phí đạt số dư, Server phải tự kết thúc phiên.");
+await using (var db = new NetCafeDbContext(options))
+{
+    UsageSession persisted = await db.UsageSessions
+        .Include(row => row.Account)
+        .SingleAsync(row => row.Id == balanceSession.Value.SessionId);
+    Assert(
+        persisted.Status == UsageSessionStatuses.Ended &&
+        persisted.EndReason == "HetTien" &&
+        persisted.Account.Balance == 0m,
+        "Phiên hết tiền phải được lưu trạng thái, lý do và số dư đồng bộ.");
+}
+
 timeProvider.Advance(TimeSpan.FromHours(8));
 SessionResult<UsageSessionSummary> expiredMachine = await sessions.StartAsync(
     client2,

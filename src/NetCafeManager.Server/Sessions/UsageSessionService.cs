@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using NetCafeManager.Infrastructure.Persistence;
 using NetCafeManager.Infrastructure.Persistence.Entities;
 using NetCafeManager.Shared.Authentication;
+using NetCafeManager.Server.Billing;
+using NetCafeManager.Shared.Billing;
 using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Server.Sessions;
@@ -260,6 +262,82 @@ public sealed class UsageSessionService
             ? null
             : ToSummary(session, session.Computer, session.Account);
     }
+
+    public async Task<SessionBalanceStatus> EvaluateBalanceAsync(
+        AuthenticatedUser actor,
+        long sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        if (sessionId <= 0)
+        {
+            return NoActiveSession();
+        }
+
+        await using var db = new NetCafeDbContext(_options);
+        UsageSession? session = await db.UsageSessions
+            .AsNoTracking()
+            .Include(row => row.Account)
+            .SingleOrDefaultAsync(
+                row => row.Id == sessionId &&
+                       row.AccountId == actor.Id &&
+                       row.EndedAtUtc == null &&
+                       row.Status != UsageSessionStatuses.Ended,
+                cancellationToken);
+        if (session is null)
+        {
+            return NoActiveSession();
+        }
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        DateTimeOffset startedAt = new(session.StartedAtUtc, TimeSpan.Zero);
+        decimal elapsedMinutes = Math.Max(
+            1m,
+            (decimal)Math.Ceiling(Math.Max(0d, (now - startedAt).TotalMinutes)));
+        decimal projectedCost = decimal.Round(
+            session.HourlyRateApplied * elapsedMinutes / 60m,
+            2,
+            MidpointRounding.AwayFromZero);
+        decimal remaining = Math.Max(0m, session.Account.Balance - projectedCost);
+
+        if (projectedCost >= session.Account.Balance)
+        {
+            SessionResult<UsageSessionSummary> ended = await EndAsync(
+                actor,
+                session.Id,
+                "HetTien",
+                cancellationToken);
+            if (ended.IsSuccess || ended.ErrorCode == "SESSION_ALREADY_ENDED")
+            {
+                return new SessionBalanceStatus(
+                    HasActiveSession: false,
+                    ShouldWarn: true,
+                    SessionEnded: true,
+                    RemainingBalance: 0m,
+                    EstimatedRemaining: TimeSpan.Zero,
+                    Message: "Số dư đã hết. Server đã tự động kết thúc phiên sử dụng.");
+            }
+        }
+
+        BalanceWarningState warning = BalanceWarningEvaluator.Evaluate(
+            remaining,
+            session.HourlyRateApplied);
+        return new SessionBalanceStatus(
+            HasActiveSession: true,
+            warning.ShouldWarn,
+            SessionEnded: false,
+            RemainingBalance: remaining,
+            warning.EstimatedRemaining,
+            warning.Message);
+    }
+
+    private static SessionBalanceStatus NoActiveSession() => new(
+        HasActiveSession: false,
+        ShouldWarn: false,
+        SessionEnded: false,
+        RemainingBalance: 0m,
+        EstimatedRemaining: TimeSpan.Zero,
+        Message: "Không có phiên sử dụng đang hoạt động.");
 
     private static Task<int> AcquireLockAsync(
         NetCafeDbContext db,

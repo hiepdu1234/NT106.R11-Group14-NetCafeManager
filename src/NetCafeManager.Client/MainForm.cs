@@ -77,6 +77,14 @@ public sealed class MainForm : Form
     private DesktopSettings _settings = DesktopSettings.Load();
     private readonly TextBox _serverHost = NewTextBox("Địa chỉ Server");
     private readonly TextBox _serverPort = NewTextBox("Cổng Server");
+    private readonly CheckBox _useTls = new()
+    {
+        Text = "Bật TLS (bắt buộc khi chạy qua LAN)",
+        AutoSize = true,
+        Margin = new Padding(0, 3, 0, 10)
+    };
+    private readonly TextBox _serverCertificateSha256 =
+        NewTextBox("SHA-256 chứng thư Server (tùy chọn nếu chứng thư đã được Windows tin cậy)");
     private readonly ComboBox _deviceMode = new()
     {
         DropDownStyle = ComboBoxStyle.DropDownList,
@@ -104,6 +112,7 @@ public sealed class MainForm : Form
     private readonly Label _clientWelcome = Hint("");
     private readonly Label _clientSession = Hint("");
     private readonly Label _adminWelcome = Hint("");
+    private readonly AdminDashboardControl _adminDashboard;
     private readonly DataGridView _productGrid = new()
     {
         Dock = DockStyle.Top, Height = 220, ReadOnly = true,
@@ -137,6 +146,7 @@ public sealed class MainForm : Form
     private UsageSessionSummary? _activeSession;
     private bool _machineVerified;
     private bool _authenticated;
+    private bool _balanceWarningShown;
     private Button? _loginButton;
     private Button? _requestOtpButton;
     private Button? _verifyOtpButton;
@@ -154,12 +164,18 @@ public sealed class MainForm : Form
         Text = "NetCafeManager | Đăng nhập";
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
-        MinimumSize = new Size(840, 660);
-        ClientSize = new Size(1000, 710);
+        MinimumSize = new Size(1050, 680);
+        ClientSize = new Size(1240, 760);
         Font = new Font("Segoe UI", 10);
         BackColor = Theme.Background;
 
         _errors.ContainerControl = this;
+        _adminDashboard = new AdminDashboardControl(
+            SendAdminAsync,
+            (message, error) => SetStatus(
+                message,
+                error: error,
+                success: !error));
         _errors.BlinkStyle = ErrorBlinkStyle.NeverBlink;
         FormClosing += async (_, e) =>
         {
@@ -208,6 +224,9 @@ public sealed class MainForm : Form
 
         _serverHost.Text = _settings.ServerHost;
         _serverPort.Text = _settings.ServerPort.ToString();
+        _useTls.Checked = _settings.UseTls;
+        _serverCertificateSha256.Text =
+            _settings.ServerCertificateSha256 ?? string.Empty;
         _machineName.Text = _settings.MachineName;
         _machineKey.Text = _settings.TryUnprotectMachineKey() ?? string.Empty;
         _deviceMode.Items.AddRange([
@@ -244,6 +263,13 @@ public sealed class MainForm : Form
             UpdateButtonStates();
             await InvalidateConnectionSettingsAsync();
         };
+        _useTls.CheckedChanged += async (_, _) =>
+        {
+            _serverCertificateSha256.Enabled = _useTls.Checked;
+            await InvalidateConnectionSettingsAsync();
+        };
+        _serverCertificateSha256.TextChanged += async (_, _) =>
+            await InvalidateConnectionSettingsAsync();
         _machineKey.TextChanged += (_, _) => UpdateButtonStates();
         _deviceMode.SelectedIndexChanged += async (_, _) =>
         {
@@ -263,6 +289,8 @@ public sealed class MainForm : Form
         _machineKey.MaxLength = 512;
         _serverHost.MaxLength = 253;
         _serverPort.MaxLength = 5;
+        _serverCertificateSha256.MaxLength = 95;
+        _serverCertificateSha256.Enabled = _useTls.Checked;
 
         // Neu nguoi dung sua tai khoan trong khi dang khoi phuc,
         // phai xac minh OTP lai; khong giu trang thai cu.
@@ -351,9 +379,9 @@ public sealed class MainForm : Form
             RowCount = 1,
             Margin = Padding.Empty
         };
-        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 8));
+        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 84));
+        center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 8));
         center.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _pageHost.Paint += (_, e) =>
         {
@@ -400,6 +428,8 @@ public sealed class MainForm : Form
         AddField(machine, "Loại thiết bị", _deviceMode);
         AddField(machine, "Địa chỉ Server", _serverHost);
         AddField(machine, "Cổng Server", _serverPort);
+        AddItem(machine, _useTls);
+        AddField(machine, "Dấu vân tay SHA-256 chứng thư Server", _serverCertificateSha256);
         AddField(machine, "Tên máy", _machineName);
         AddField(machine, "Khóa máy Base64", _machineKey);
         AddItem(machine, Hint(
@@ -460,8 +490,7 @@ public sealed class MainForm : Form
         TableLayoutPanel adminDashboard = NewPage(
             "QUẢN TRỊ MÁY CHỦ", "Mọi thao tác quản trị vẫn được Server kiểm tra quyền.");
         AddItem(adminDashboard, _adminWelcome);
-        AddItem(adminDashboard, Hint(
-            "Khu vực quản lý tài khoản, máy trạm, số dư, hóa đơn và tồn kho sẽ được tích hợp tại đây."));
+        AddItem(adminDashboard, _adminDashboard);
         _adminLogoutButton = NewButton("Đăng xuất", isPrimary: true);
         _adminLogoutButton.Click += async (_, _) => await ExecuteAsync(EndSessionAsync);
         AddItem(adminDashboard, _adminLogoutButton);
@@ -851,10 +880,16 @@ public sealed class MainForm : Form
 
         var client = new TcpClientAgent();
         client.HeartbeatFailed += HandleHeartbeatFailure;
+        client.BalanceStatusChanged += HandleBalanceStatusChanged;
         _client = client;
         try
         {
-            await client.ConnectAsync(host, ReadServerPort(), cancellationToken);
+            await client.ConnectAsync(
+                host,
+                ReadServerPort(),
+                cancellationToken,
+                _useTls.Checked,
+                _serverCertificateSha256.Text);
         }
         catch
         {
@@ -863,6 +898,7 @@ public sealed class MainForm : Form
                 _client = null;
             }
             client.HeartbeatFailed -= HandleHeartbeatFailure;
+            client.BalanceStatusChanged -= HandleBalanceStatusChanged;
             await client.DisposeAsync();
             throw;
         }
@@ -976,6 +1012,67 @@ public sealed class MainForm : Form
         {
             // Form có thể đang đóng khi callback heartbeat được đưa về UI thread.
         }
+    }
+
+    private void HandleBalanceStatusChanged(
+        TcpClientAgent source,
+        SessionBalanceStatus status)
+    {
+        if (_isClosing || !ReferenceEquals(_client, source) || !IsHandleCreated)
+        {
+            return;
+        }
+
+        BeginInvoke(new Action(async () =>
+        {
+            if (_isClosing || !ReferenceEquals(_client, source)) return;
+
+            if (status.SessionEnded)
+            {
+                _activeSession = null;
+                _clientWelcome.Text = "Số dư còn lại: 0 đồng.";
+                _clientSession.Text = status.Message;
+                SetStatus(status.Message, error: true);
+                MessageBox.Show(
+                    this,
+                    status.Message,
+                    "Phiên đã tự động kết thúc",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await SendAsync(NetworkMessageTypes.AuthLogout, new { }, timeout.Token);
+                }
+                catch
+                {
+                    await ResetConnectionAsync(source);
+                }
+                _authenticated = false;
+                _balanceWarningShown = false;
+                ShowPage("login");
+                return;
+            }
+
+            if (!status.HasActiveSession) return;
+            _clientWelcome.Text = $"Số dư khả dụng ước tính: {status.RemainingBalance:N0} đồng.";
+            if (status.ShouldWarn)
+            {
+                _clientSession.Text =
+                    $"Còn khoảng {Math.Max(0, Math.Ceiling(status.EstimatedRemaining.TotalMinutes))} phút sử dụng.";
+                SetStatus(status.Message, error: true);
+                if (!_balanceWarningShown)
+                {
+                    _balanceWarningShown = true;
+                    MessageBox.Show(
+                        this,
+                        status.Message,
+                        "Cảnh báo số dư",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+        }));
     }
 
     private async Task HandleNetworkFailureAsync()
@@ -1133,15 +1230,18 @@ public sealed class MainForm : Form
         if (current is not null)
         {
             current.HeartbeatFailed -= HandleHeartbeatFailure;
+            current.BalanceStatusChanged -= HandleBalanceStatusChanged;
             await current.DisposeAsync();
         }
 
         _activeSession = null;
         _machineVerified = false;
         _authenticated = false;
+        _balanceWarningShown = false;
         _clientWelcome.Text = string.Empty;
         _clientSession.Text = string.Empty;
         _adminWelcome.Text = string.Empty;
+        _adminDashboard.Clear();
         _machineStatus.Text = "Máy chưa được xác thực.";
         if (updateConnectionState)
         {
@@ -1196,11 +1296,17 @@ public sealed class MainForm : Form
 
         var client = new TcpClientAgent();
         client.HeartbeatFailed += HandleHeartbeatFailure;
+        client.BalanceStatusChanged += HandleBalanceStatusChanged;
         _client = client;
 
         try
         {
-            await client.ConnectAsync(host, ReadServerPort(), cancellationToken);
+            await client.ConnectAsync(
+                host,
+                ReadServerPort(),
+                cancellationToken,
+                _useTls.Checked,
+                _serverCertificateSha256.Text);
 
             SessionResult<MachineHandshakeChallenge> challenge =
                 await SendResultOnClientAsync<
@@ -1239,7 +1345,9 @@ public sealed class MainForm : Form
                 ReadServerPort(),
                 SelectedMode(),
                 completed.Value.MachineName,
-                _machineKey.Text);
+                _machineKey.Text,
+                _useTls.Checked,
+                _serverCertificateSha256.Text);
             _settings.Save();
             UpdateDeviceBadge();
             return completed.Value;
@@ -1251,6 +1359,7 @@ public sealed class MainForm : Form
                 _client = null;
             }
             client.HeartbeatFailed -= HandleHeartbeatFailure;
+            client.BalanceStatusChanged -= HandleBalanceStatusChanged;
             await client.DisposeAsync();
             _machineVerified = false;
             throw;
@@ -1334,6 +1443,7 @@ public sealed class MainForm : Form
         _clientWelcome.Text = string.Empty;
         _clientSession.Text = string.Empty;
         _adminWelcome.Text = string.Empty;
+        _adminDashboard.Clear();
         ShowPage("login");
         UpdateButtonStates();
         SetStatus("Đã kết thúc phiên và đăng xuất.", success: true);
@@ -1420,6 +1530,7 @@ public sealed class MainForm : Form
                 if (!started.IsSuccess || started.Value is null)
                     throw new InvalidOperationException(started.Message);
                 _activeSession = started.Value;
+                _balanceWarningShown = false;
                 _clientWelcome.Text =
                     $"Xin chào {result.User.Username}. Số dư hiện tại: " +
                     $"{started.Value.RemainingBalance:N0} đồng.";
@@ -1432,6 +1543,7 @@ public sealed class MainForm : Form
             {
                 _adminWelcome.Text =
                     $"Xin chào {result.User.Username}. Bạn đã đăng nhập với quyền quản trị.";
+                await _adminDashboard.InitializeAsync(timeout.Token);
             }
             _authenticated = true;
             ShowPage(result.User.Role == UserRole.Client
@@ -1460,6 +1572,18 @@ public sealed class MainForm : Form
         if (_productGrid.Rows.Count > 0)
             _productGrid.Rows[0].Selected = true;
         SetStatus($"Đã tải {products.Count} sản phẩm.", success: true);
+    }
+
+    private async Task<JsonElement> SendAdminAsync(
+        string type,
+        object payload,
+        CancellationToken cancellationToken)
+    {
+        NetworkMessage response = await SendAsync(
+            type,
+            payload,
+            cancellationToken);
+        return response.Data.Clone();
     }
 
     private async Task PurchaseProductAsync()

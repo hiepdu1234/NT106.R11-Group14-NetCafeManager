@@ -33,7 +33,7 @@ dotnet build tests/NetCafeManager.CustomerManagementSmoke/NetCafeManager.Custome
 ### Điều kiện
 
 - Gói quản lý khách hàng đã merge vào `main`.
-- Phần tự động trừ tiền theo phiên, cảnh báo qua TCP và khóa máy đang chờ module phiên sử dụng của Quân.
+- Phần tính tiền theo phiên, cảnh báo qua heartbeat và tự kết thúc khi hết tiền đã được tích hợp.
 
 ### Kiểm tra
 
@@ -55,7 +55,7 @@ dotnet build tests/NetCafeManager.BillingSmoke/NetCafeManager.BillingSmoke.cspro
 ### Điều kiện
 
 - Cơ sở dữ liệu đã có bảng phiên, chi tiết dịch vụ và hóa đơn.
-- Điểm gọi tự động khi kết thúc phiên đang chờ module phiên sử dụng của Quân.
+- Hóa đơn có thể được lập từ giao diện quản trị sau khi phiên kết thúc.
 
 ### Kiểm tra
 
@@ -119,7 +119,7 @@ dotnet build tests/NetCafeManager.CustomerManagementSmoke/NetCafeManager.Custome
 ### Điều kiện
 
 - Gói quản lý khách hàng đã merge vào `main`.
-- Phần tự động trừ tiền theo phiên, cảnh báo qua TCP và khóa máy đang chờ module phiên sử dụng của Quân.
+- Phần tính tiền theo phiên, cảnh báo qua heartbeat và tự kết thúc khi hết tiền đã được tích hợp.
 
 ### Kiểm tra
 
@@ -141,7 +141,7 @@ dotnet build tests/NetCafeManager.BillingSmoke/NetCafeManager.BillingSmoke.cspro
 ### Điều kiện
 
 - Cơ sở dữ liệu đã có bảng phiên, chi tiết dịch vụ và hóa đơn.
-- Điểm gọi tự động khi kết thúc phiên đang chờ module phiên sử dụng của Quân.
+- Hóa đơn có thể được lập từ giao diện quản trị sau khi phiên kết thúc.
 
 ### Kiểm tra
 

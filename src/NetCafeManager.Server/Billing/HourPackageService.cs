@@ -36,6 +36,29 @@ public sealed class HourPackageService
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<HourPackageSummary>> ListForAdministrationAsync(
+        AuthenticatedUser actor,
+        CancellationToken cancellationToken = default)
+    {
+        if (!AdministratorGuard.IsAdministrator(actor))
+        {
+            throw new UnauthorizedAccessException(
+                "Chỉ quản trị viên được xem toàn bộ gói giờ.");
+        }
+
+        await using var db = new NetCafeDbContext(_options);
+        return await db.HourPackages
+            .AsNoTracking()
+            .OrderBy(package => package.Hours)
+            .Select(package => new HourPackageSummary(
+                package.Id,
+                package.Name,
+                package.Hours,
+                package.Price,
+                package.IsActive))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<BillingResult<HourPackageSummary>> SaveAsync(
         AuthenticatedUser actor,
         SaveHourPackageRequest request,

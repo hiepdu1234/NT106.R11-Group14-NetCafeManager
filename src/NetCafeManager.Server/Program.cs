@@ -6,6 +6,10 @@ using NetCafeManager.Server.Machines;
 using NetCafeManager.Server.Networking;
 using NetCafeManager.Server.Sessions;
 using NetCafeManager.Server.Inventory;
+using NetCafeManager.Server.Billing;
+using NetCafeManager.Server.Customers;
+using NetCafeManager.Server.Invoices;
+using System.Security.Cryptography.X509Certificates;
 
 namespace NetCafeManager.Server;
 
@@ -54,33 +58,53 @@ internal static class Program
 
             var authHandler = new AuthTcpHandler(
                 authentication.Authentication);
-            var machineHandler = new MachineTcpHandler(
-                handshakes,
-                heartbeats);
             var sessionHandler = new SessionTcpHandler(
                 usageSessions,
                 authentication.Authentication);
+            var machineHandler = new MachineTcpHandler(
+                handshakes,
+                heartbeats,
+                sessionHandler);
             var passwordResetHandler = new PasswordResetTcpHandler(
                 authentication.PasswordReset);
             var productPurchaseHandler = new ProductPurchaseTcpHandler(
                 new ProductPurchaseService(connectionString),
                 new ProductInventoryService(connectionString),
                 authentication.Authentication);
+            var adminOperationsHandler = new AdminOperationsTcpHandler(
+                new CustomerManagementService(connectionString),
+                new HourPackageService(connectionString),
+                new TopUpService(connectionString),
+                new ProductInventoryService(connectionString),
+                new InvoiceService(connectionString),
+                new BalanceRefundService(connectionString),
+                authentication.Authentication);
 
             int port = ReadPort();
+            IPAddress listenAddress = ReadListenAddress();
+            using X509Certificate2? serverCertificate = LoadServerCertificate();
+            if (!IPAddress.IsLoopback(listenAddress) && serverCertificate is null)
+            {
+                throw new InvalidOperationException(
+                    "Khi mở Server ra LAN, phải cấu hình chứng thư TLS bằng " +
+                    "NETCAFE_TLS_CERTIFICATE_PATH.");
+            }
             var server = new TcpServer(
-                IPAddress.Loopback,
+                listenAddress,
                 port,
                 authHandler,
                 machineHandler,
                 sessionHandler,
                 passwordResetHandler,
-                productPurchaseHandler);
+                productPurchaseHandler,
+                adminOperationsHandler,
+                serverCertificate);
 
             Console.WriteLine(
                 "NetCafeManager TCP Authentication Server");
-            Console.WriteLine(
-                "Chỉ lắng nghe loopback; cần TLS trước khi mở ra mạng LAN.");
+            Console.WriteLine(serverCertificate is null
+                ? "Chế độ demo loopback không TLS."
+                : "TLS đã bật cho kết nối TCP.");
             await server.StartAsync(cancellationTokenSource.Token);
         }
         finally
@@ -179,6 +203,48 @@ internal static class Program
         Environment.GetEnvironmentVariable("NETCAFE_TCP_PORT") is null
             ? 5050
             : ReadInteger("NETCAFE_TCP_PORT", 1, 65535);
+
+    private static IPAddress ReadListenAddress()
+    {
+        string raw = Environment.GetEnvironmentVariable(
+            "NETCAFE_LISTEN_ADDRESS") ?? IPAddress.Loopback.ToString();
+        return IPAddress.TryParse(raw, out IPAddress? address)
+            ? address
+            : throw new InvalidOperationException(
+                "NETCAFE_LISTEN_ADDRESS phải là địa chỉ IP hợp lệ.");
+    }
+
+    private static X509Certificate2? LoadServerCertificate()
+    {
+        string? path = Environment.GetEnvironmentVariable(
+            "NETCAFE_TLS_CERTIFICATE_PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException(
+                "Không tìm thấy tệp chứng thư TLS của Server.");
+        }
+
+#pragma warning disable SYSLIB0057
+        var certificate = new X509Certificate2(
+            path,
+            Environment.GetEnvironmentVariable("NETCAFE_TLS_CERTIFICATE_PASSWORD"),
+            X509KeyStorageFlags.EphemeralKeySet |
+            X509KeyStorageFlags.Exportable);
+#pragma warning restore SYSLIB0057
+        if (!certificate.HasPrivateKey)
+        {
+            certificate.Dispose();
+            throw new InvalidOperationException(
+                "Chứng thư TLS phải chứa private key.");
+        }
+
+        return certificate;
+    }
 
     private static int ReadInteger(
         string variableName,

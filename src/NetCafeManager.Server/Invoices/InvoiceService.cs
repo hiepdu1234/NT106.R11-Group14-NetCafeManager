@@ -201,6 +201,35 @@ public sealed class InvoiceService
             : InvoiceResult<InvoiceSummary>.Success(ToSummary(invoice), "Đã tải hóa đơn.");
     }
 
+    public async Task<IReadOnlyList<InvoiceSummary>> ListAsync(
+        AuthenticatedUser actor,
+        int maximum = 200,
+        CancellationToken cancellationToken = default)
+    {
+        if (!AdministratorGuard.IsAdministrator(actor))
+        {
+            throw new UnauthorizedAccessException(
+                "Chỉ quản trị viên được xem danh sách hóa đơn.");
+        }
+
+        int take = Math.Clamp(maximum, 1, 500);
+        await using var db = new NetCafeDbContext(_options);
+        return await db.Invoices
+            .AsNoTracking()
+            .OrderByDescending(invoice => invoice.CreatedAtUtc)
+            .Take(take)
+            .Select(invoice => new InvoiceSummary(
+                invoice.Id,
+                invoice.UsageSessionId,
+                invoice.UsageCost,
+                invoice.ServiceCost,
+                invoice.Discount,
+                invoice.TotalAmount,
+                new DateTimeOffset(invoice.CreatedAtUtc, TimeSpan.Zero),
+                invoice.Status))
+            .ToListAsync(cancellationToken);
+    }
+
     private static InvoiceSummary ToSummary(Invoice invoice) =>
         new(
             invoice.Id,
