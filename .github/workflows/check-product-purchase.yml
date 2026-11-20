@@ -8,6 +8,7 @@ on:
       - database/migrations/002_business_data_hardening.sql
       - database/migrations/003_prepaid_invoice_policy.sql
       - database/migrations/004_balance_refund.sql
+      - database/migrations/005_product_purchase_idempotency.sql
       - database/seed/001_seed_core.sql
       - src/NetCafeManager.Infrastructure/Persistence/**
       - src/NetCafeManager.Server/Inventory/**
@@ -22,6 +23,7 @@ on:
       - database/migrations/002_business_data_hardening.sql
       - database/migrations/003_prepaid_invoice_policy.sql
       - database/migrations/004_balance_refund.sql
+      - database/migrations/005_product_purchase_idempotency.sql
       - database/seed/001_seed_core.sql
       - src/NetCafeManager.Infrastructure/Persistence/**
       - src/NetCafeManager.Server/Inventory/**
@@ -119,6 +121,9 @@ jobs:
 
           echo "Applying migration 004..."
           sql -d NetCafeManager_CI < database/migrations/004_balance_refund.sql
+
+          echo "Applying migration 005..."
+          sql -d NetCafeManager_CI < database/migrations/005_product_purchase_idempotency.sql
 
           echo "Applying seed data..."
           sql -d NetCafeManager_CI < database/seed/001_seed_core.sql

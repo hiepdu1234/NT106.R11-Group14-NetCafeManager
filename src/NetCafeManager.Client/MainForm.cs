@@ -117,6 +117,9 @@ public sealed class MainForm : Form
       Font = new Font("Segoe UI", 11), ThousandsSeparator = true };
     private Button? _purchaseButton;
     private Button? _refreshProductsButton;
+    private Guid _pendingPurchaseCommandId;
+    private int _pendingPurchaseProductId;
+    private int _pendingPurchaseQuantity;
 
     private readonly ErrorProvider _errors = new();
     private readonly CancellationTokenSource _applicationLifetime = new();
@@ -1468,13 +1471,30 @@ public sealed class MainForm : Form
             !int.TryParse(Convert.ToString(_productGrid.CurrentRow.Cells["Id"].Value), out int productId))
             throw new InvalidOperationException("Hãy chọn sản phẩm cần mua.");
 
-        InventoryResult<ProductPurchaseReceipt> purchase =
-            await SendResultAsync<InventoryResult<ProductPurchaseReceipt>>(
+        int quantity = (int)_purchaseQuantity.Value;
+        Guid commandId = GetOrCreatePurchaseCommandId(productId, quantity);
+        InventoryResult<ProductPurchaseReceipt> purchase;
+        try
+        {
+            purchase = await SendResultAsync<InventoryResult<ProductPurchaseReceipt>>(
                 NetworkMessageTypes.ProductPurchase,
-                new PurchaseProductRequest(productId, (int)_purchaseQuantity.Value),
+                new PurchaseProductRequest(productId, quantity, commandId),
                 CancellationToken.None);
+        }
+        catch
+        {
+            // Giữ CommandId khi mất response. Sau khi reconnect, người dùng bấm
+            // mua lại đúng sản phẩm/số lượng sẽ nhận kết quả cũ thay vì bị trừ lần hai.
+            throw;
+        }
+
         if (!purchase.IsSuccess || purchase.Value is null)
+        {
+            ClearPendingPurchaseCommand();
             throw new InvalidOperationException(purchase.Message);
+        }
+
+        ClearPendingPurchaseCommand();
         ProductPurchaseReceipt receipt = purchase.Value;
         _clientWelcome.Text = $"Số dư còn lại: {receipt.RemainingBalance:N0} đồng.";
         await LoadProductsAsync();
@@ -1484,6 +1504,27 @@ public sealed class MainForm : Form
             $"Thành tiền: {receipt.TotalAmount:N0} đ\n" +
             $"Số dư còn lại: {receipt.RemainingBalance:N0} đ",
             "Thanh toán thành công", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private Guid GetOrCreatePurchaseCommandId(int productId, int quantity)
+    {
+        if (_pendingPurchaseCommandId == Guid.Empty ||
+            _pendingPurchaseProductId != productId ||
+            _pendingPurchaseQuantity != quantity)
+        {
+            _pendingPurchaseCommandId = Guid.NewGuid();
+            _pendingPurchaseProductId = productId;
+            _pendingPurchaseQuantity = quantity;
+        }
+
+        return _pendingPurchaseCommandId;
+    }
+
+    private void ClearPendingPurchaseCommand()
+    {
+        _pendingPurchaseCommandId = Guid.Empty;
+        _pendingPurchaseProductId = 0;
+        _pendingPurchaseQuantity = 0;
     }
 
     private async Task RequestOtpAsync()

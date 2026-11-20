@@ -1,6 +1,9 @@
 namespace NetCafeManager.Shared.Inventory;
 
-public sealed record PurchaseProductRequest(int ProductId, int Quantity);
+public sealed record PurchaseProductRequest(
+    int ProductId,
+    int Quantity,
+    Guid CommandId);
 
 public sealed record ProductPurchaseReceipt(
     long DetailId,
