@@ -125,9 +125,11 @@ public sealed class MachineHandshakeService
             "Máy trạm đã được xác thực.");
     }
 
+    // Locked machines may authenticate to preserve the administrative control
+    // channel. UsageSessionService independently prevents them from starting a
+    // customer session until an administrator marks them Available again.
     private static bool IsUnavailable(string status) =>
-        status is ComputerStatuses.Locked or
-            ComputerStatuses.Maintenance or
+        status is ComputerStatuses.Maintenance or
             ComputerStatuses.Incident;
 
     private static string? NormalizeIp(string? remoteIpAddress)

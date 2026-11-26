@@ -1,6 +1,6 @@
 /*
-  Migration 006: nh?t k? thao t�c qu?n tr? v� l?ch s? tr?ng th�i m�y.
-  Ch?y sau migration 005_product_purchase_idempotency.sql.
+  Migration 006: administrator audit log and machine-status history.
+  Run after migration 005_product_purchase_idempotency.sql.
 */
 
 SET NOCOUNT ON;
@@ -80,4 +80,3 @@ BEGIN CATCH
     THROW;
 END CATCH;
 GO
-

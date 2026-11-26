@@ -46,8 +46,11 @@ public sealed class MachineHeartbeatService
                 "Khong tim thay may tram.");
         }
 
-        if (computer.Status is ComputerStatuses.Locked or
-            ComputerStatuses.Maintenance or
+        // A remotely locked workstation must keep its control channel alive so
+        // it can receive a later unlock from an administrator. Starting a paid
+        // session is still blocked by UsageSessionService unless the status is
+        // Available.
+        if (computer.Status is ComputerStatuses.Maintenance or
             ComputerStatuses.Incident)
         {
             return SessionResult<MachineHeartbeatAck>.Failure(

@@ -17,7 +17,9 @@ var options = new DbContextOptionsBuilder<NetCafeDbContext>()
     .Options;
 
 Guid adminId = Guid.NewGuid();
+Guid clientId = Guid.NewGuid();
 string suffix = Guid.NewGuid().ToString("N")[..8];
+string machineName = $"REMOTE-{suffix}";
 int computerId;
 var actor = new AuthenticatedUser(
     adminId,
@@ -41,9 +43,23 @@ await using (var db = new NetCafeDbContext(options))
         PasswordSaltBase64 = Convert.ToBase64String(new byte[32]),
         PasswordHashBase64 = Convert.ToBase64String(new byte[32])
     });
+    db.Accounts.Add(new Account
+    {
+        Id = clientId,
+        Username = $"remote-client-{suffix}",
+        Email = $"remote-client-{suffix}@example.test",
+        FullName = "Remote command smoke client",
+        Role = nameof(UserRole.Client),
+        Balance = 100_000m,
+        IsActive = true,
+        PasswordAlgorithm = "PBKDF2-SHA256",
+        PasswordIterations = 100_000,
+        PasswordSaltBase64 = Convert.ToBase64String(new byte[32]),
+        PasswordHashBase64 = Convert.ToBase64String(new byte[32])
+    });
     var computer = new Computer
     {
-        Name = $"REMOTE-{suffix}",
+        Name = machineName,
         Status = ComputerStatuses.Available
     };
     db.Computers.Add(computer);
@@ -64,7 +80,7 @@ try
 
     var machine = new VerifiedMachine(
         computerId,
-        $"REMOTE-{suffix}",
+        machineName,
         DateTimeOffset.UtcNow,
         DateTimeOffset.UtcNow.AddMinutes(10));
     PendingRemoteCommand? pending = await commands.TakePendingAsync(machine);
@@ -92,6 +108,38 @@ try
             "Lệnh khóa thành công phải chuyển trạng thái máy sang Khoa.");
     }
 
+    byte[] machineKey = Enumerable.Range(1, 32)
+        .Select(value => (byte)value)
+        .ToArray();
+    var handshake = new MachineHandshakeService(
+        connectionString,
+        new DictionaryMachineKeyProvider(
+            new Dictionary<string, byte[]>
+            {
+                [machineName] = machineKey
+            }));
+    SessionResult<MachineHandshakeChallenge> challenge =
+        await handshake.BeginAsync(machineName);
+    Require(challenge.IsSuccess && challenge.Value is not null,
+        "A locked machine must be allowed to start a control handshake.");
+    string proof = MachineHandshakeProof.ComputeBase64(
+        machineKey,
+        challenge.Value!);
+    SessionResult<VerifiedMachine> verified = await handshake.CompleteAsync(
+        challenge.Value!.ChallengeId,
+        proof,
+        "127.0.0.1");
+    Require(verified.IsSuccess && verified.Value is not null,
+        "A locked machine must reconnect to the control channel.");
+
+    var heartbeat = new MachineHeartbeatService(connectionString);
+    SessionResult<MachineHeartbeatAck> lockedHeartbeat =
+        await heartbeat.RecordAsync(verified.Value!);
+    Require(
+        lockedHeartbeat.IsSuccess &&
+        lockedHeartbeat.Value?.ComputerStatus == ComputerStatuses.Locked,
+        "A locked machine must keep sending heartbeats.");
+
     var machines = new MachineAdministrationService(connectionString);
     AdminResult<MachineAdminSummary> unlocked =
         await machines.SetStatusAsync(
@@ -101,6 +149,12 @@ try
                 ComputerStatuses.Available,
                 "Smoke unlock"));
     Require(unlocked.IsSuccess, "Quản trị viên phải mở khóa lại được máy.");
+    SessionResult<MachineHeartbeatAck> unlockedHeartbeat =
+        await heartbeat.RecordAsync(verified.Value!);
+    Require(
+        unlockedHeartbeat.IsSuccess &&
+        unlockedHeartbeat.Value?.ComputerStatus == ComputerStatuses.Available,
+        "The next heartbeat must deliver the unlocked state.");
     IReadOnlyList<MachineStatusHistorySummary> history =
         await machines.ListHistoryAsync(actor, computerId);
     Require(history.Count >= 2,
@@ -119,6 +173,34 @@ try
         await audit.ListRecentAsync(actor);
     Require(auditRows.Any(row => row.TargetId == computerId.ToString()),
         "Phải đọc lại được nhật ký quản trị.");
+    await using (var db = new NetCafeDbContext(options))
+    {
+        db.UsageSessions.Add(new UsageSession
+        {
+            ComputerId = computerId,
+            AccountId = clientId,
+            StartedAtUtc = DateTime.UtcNow,
+            HourlyRateApplied = 10_000m,
+            UsageCost = 0m,
+            Status = UsageSessionStatuses.InUse
+        });
+        Computer computer = await db.Computers.SingleAsync(
+            row => row.Id == computerId);
+        computer.Status = ComputerStatuses.InUse;
+        await db.SaveChangesAsync();
+    }
+
+    AdminResult<MachineAdminSummary> activeSessionChange =
+        await machines.SetStatusAsync(
+            actor,
+            new SetMachineStatusRequest(
+                computerId,
+                ComputerStatuses.Locked,
+                "Must be rejected while a paid session is active"));
+    Require(
+        !activeSessionChange.IsSuccess &&
+        activeSessionChange.ErrorCode == "MACHINE_HAS_ACTIVE_SESSION",
+        "An administrator must not overwrite an active usage session state.");
 }
 finally
 {
@@ -129,10 +211,14 @@ finally
         db.MachineStatusHistories.Where(row => row.ComputerId == computerId));
     db.AdministrativeAudits.RemoveRange(
         db.AdministrativeAudits.Where(row => row.AdministratorAccountId == adminId));
+    db.UsageSessions.RemoveRange(
+        db.UsageSessions.Where(row => row.ComputerId == computerId));
     Computer? computer = await db.Computers.FindAsync(computerId);
     if (computer is not null) db.Computers.Remove(computer);
     Account? account = await db.Accounts.FindAsync(adminId);
     if (account is not null) db.Accounts.Remove(account);
+    Account? client = await db.Accounts.FindAsync(clientId);
+    if (client is not null) db.Accounts.Remove(client);
     await db.SaveChangesAsync();
 }
 
