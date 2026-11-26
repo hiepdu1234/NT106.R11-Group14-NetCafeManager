@@ -9,6 +9,7 @@ on:
       - src/NetCafeManager.Shared/**
       - src/NetCafeManager.Infrastructure/**
       - tests/NetCafeManager.AdminOperationsSmoke/**
+      - tests/NetCafeManager.RemoteMachineControlSmoke/**
       - database/**
   workflow_dispatch:
 
@@ -26,6 +27,7 @@ jobs:
           dotnet-version: '8.0.x'
       - run: dotnet build NetCafeManager.sln --configuration Release -p:BuildInParallel=false
       - run: dotnet build tests/NetCafeManager.AdminOperationsSmoke --configuration Release -p:BuildInParallel=false
+      - run: dotnet build tests/NetCafeManager.RemoteMachineControlSmoke --configuration Release -p:BuildInParallel=false
 
   admin-operations-smoke:
     runs-on: ubuntu-latest
@@ -77,3 +79,7 @@ jobs:
         env:
           NETCAFE_ADMIN_SMOKE_CONNECTION: Server=127.0.0.1,1433;Database=NetCafeManager_Admin_CI;User ID=sa;Password=NetCafe_CI_2026!Only;Encrypt=True;TrustServerCertificate=True;
         run: dotnet run --project tests/NetCafeManager.AdminOperationsSmoke --configuration Release
+      - name: Run remote machine control smoke test
+        env:
+          NETCAFE_ADMIN_SMOKE_CONNECTION: Server=127.0.0.1,1433;Database=NetCafeManager_Admin_CI;User ID=sa;Password=NetCafe_CI_2026!Only;Encrypt=True;TrustServerCertificate=True;
+        run: dotnet run --project tests/NetCafeManager.RemoteMachineControlSmoke --configuration Release

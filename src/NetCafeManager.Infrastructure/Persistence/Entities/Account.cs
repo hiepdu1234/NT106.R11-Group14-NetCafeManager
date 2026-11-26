@@ -23,4 +23,6 @@ public sealed class Account
     public ICollection<RemoteCommand> RemoteCommands { get; } = [];
     public ICollection<BlockPolicy> CreatedBlockPolicies { get; } = [];
     public ICollection<PolicyViolation> PolicyViolations { get; } = [];
+    public ICollection<AdministrativeAudit> AdministrativeAudits { get; } = [];
+    public ICollection<MachineStatusHistory> MachineStatusChanges { get; } = [];
 }

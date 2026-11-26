@@ -73,7 +73,8 @@ public sealed class MachineHeartbeatService
             new MachineHeartbeatAck(
                 computer.Id,
                 now,
-                (int)HeartbeatDefaults.Interval.TotalSeconds),
+                (int)HeartbeatDefaults.Interval.TotalSeconds,
+                ComputerStatus: computer.Status),
             "Server da nhan heartbeat.");
     }
 

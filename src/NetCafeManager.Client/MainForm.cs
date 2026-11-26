@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows.Forms;
 using NetCafeManager.Client.Networking;
+using NetCafeManager.Shared.Administration;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Networking;
 using NetCafeManager.Shared.Inventory;
@@ -147,6 +148,8 @@ public sealed class MainForm : Form
     private bool _machineVerified;
     private bool _authenticated;
     private bool _balanceWarningShown;
+    private bool _remoteLocked;
+    private readonly HashSet<Guid> _remoteCommandsInProgress = [];
     private Button? _loginButton;
     private Button? _requestOtpButton;
     private Button? _verifyOtpButton;
@@ -750,7 +753,7 @@ public sealed class MainForm : Form
             _handshakeButton.Enabled = !_busy && !_authenticated &&
                                        _connectionState == ConnectionState.Disconnected;
         if (_loginButton is not null)
-            _loginButton.Enabled = !_busy && connected && !_authenticated;
+            _loginButton.Enabled = !_busy && connected && !_authenticated && !_remoteLocked;
         if (_purchaseButton is not null)
             _purchaseButton.Enabled = !_busy && canUseSession;
         if (_refreshProductsButton is not null)
@@ -881,6 +884,7 @@ public sealed class MainForm : Form
         var client = new TcpClientAgent();
         client.HeartbeatFailed += HandleHeartbeatFailure;
         client.BalanceStatusChanged += HandleBalanceStatusChanged;
+        client.HeartbeatReceived += HandleHeartbeatReceived;
         _client = client;
         try
         {
@@ -899,6 +903,7 @@ public sealed class MainForm : Form
             }
             client.HeartbeatFailed -= HandleHeartbeatFailure;
             client.BalanceStatusChanged -= HandleBalanceStatusChanged;
+            client.HeartbeatReceived -= HandleHeartbeatReceived;
             await client.DisposeAsync();
             throw;
         }
@@ -974,6 +979,170 @@ public sealed class MainForm : Form
         NetworkMessage response = await SendAsync(type, payload, cancellationToken);
         return response.Data.Deserialize<T>(JsonOptions)
                ?? throw new InvalidDataException("Server trả dữ liệu không hợp lệ.");
+    }
+
+    private void HandleHeartbeatReceived(
+        TcpClientAgent source,
+        MachineHeartbeatAck acknowledgement)
+    {
+        if (_isClosing || !ReferenceEquals(_client, source) || !IsHandleCreated)
+        {
+            return;
+        }
+
+        try
+        {
+            BeginInvoke(new Action(() =>
+                _ = ProcessHeartbeatAcknowledgementAsync(source, acknowledgement)));
+        }
+        catch (InvalidOperationException)
+        {
+            // Form may be closing while the heartbeat callback is queued.
+        }
+    }
+
+    private async Task ProcessHeartbeatAcknowledgementAsync(
+        TcpClientAgent source,
+        MachineHeartbeatAck acknowledgement)
+    {
+        if (_isClosing || !ReferenceEquals(_client, source))
+        {
+            return;
+        }
+
+        if (acknowledgement.ComputerStatus is { } status)
+        {
+            bool wasLocked = _remoteLocked;
+            _remoteLocked = status == ComputerStatuses.Locked;
+            if (wasLocked != _remoteLocked)
+            {
+                UpdateButtonStates();
+                if (!_remoteLocked)
+                {
+                    SetStatus("Máy đã được quản trị viên mở khóa.", success: true);
+                }
+            }
+        }
+
+        if (acknowledgement.PendingCommand is not { } command ||
+            !_remoteCommandsInProgress.Add(command.CommandId))
+        {
+            return;
+        }
+
+        try
+        {
+            await ExecuteRemoteCommandAsync(source, command);
+        }
+        finally
+        {
+            _remoteCommandsInProgress.Remove(command.CommandId);
+        }
+    }
+
+    private async Task ExecuteRemoteCommandAsync(
+        TcpClientAgent source,
+        PendingRemoteCommand command)
+    {
+        bool succeeded = false;
+        string? errorCode = null;
+        try
+        {
+            if (command.CommandType is not RemoteCommandTypes.LockComputer and
+                not RemoteCommandTypes.LogoutComputer)
+            {
+                errorCode = "UNSUPPORTED";
+            }
+            else
+            {
+                using var timeout =
+                    new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                if (_authenticated && _activeSession is not null)
+                {
+                    SessionResult<UsageSessionSummary> ended =
+                        await SendResultOnClientAsync<
+                            SessionResult<UsageSessionSummary>,
+                            EndUsageSessionRequest>(
+                            source,
+                            NetworkMessageTypes.SessionEnd,
+                            new EndUsageSessionRequest(
+                                _activeSession.SessionId,
+                                command.CommandType == RemoteCommandTypes.LockComputer
+                                    ? "KhoaTuXa"
+                                    : "DangXuatTuXa"),
+                            timeout.Token);
+                    if (!ended.IsSuccess)
+                    {
+                        throw new InvalidOperationException(ended.Message);
+                    }
+                    _activeSession = null;
+                }
+
+                if (_authenticated)
+                {
+                    await SendOnClientAsync(
+                        source,
+                        NetworkMessageTypes.AuthLogout,
+                        new { },
+                        timeout.Token);
+                    _authenticated = false;
+                }
+                succeeded = true;
+            }
+        }
+        catch
+        {
+            errorCode = "CLIENTERR";
+        }
+
+        try
+        {
+            using var timeout =
+                new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            SessionResult<RemoteCommandSummary> result =
+                await SendResultOnClientAsync<
+                    SessionResult<RemoteCommandSummary>,
+                    RemoteCommandResultRequest>(
+                    source,
+                    NetworkMessageTypes.MachineRemoteCommandResult,
+                    new RemoteCommandResultRequest(
+                        command.CommandId,
+                        succeeded,
+                        errorCode),
+                    timeout.Token);
+            if (!result.IsSuccess)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            // The next heartbeat retries if the Server did not store the result.
+            return;
+        }
+
+        if (!succeeded || !ReferenceEquals(_client, source))
+        {
+            return;
+        }
+
+        _clientWelcome.Text = string.Empty;
+        _clientSession.Text = string.Empty;
+        _adminWelcome.Text = string.Empty;
+        _adminDashboard.Clear();
+        ShowPage("login");
+        _remoteLocked = command.CommandType == RemoteCommandTypes.LockComputer;
+        UpdateButtonStates();
+        string message = _remoteLocked
+            ? "Máy đã bị quản trị viên khóa từ xa."
+            : "Quản trị viên đã kết thúc phiên và đăng xuất máy.";
+        SetStatus(message, error: _remoteLocked, success: !_remoteLocked);
+        MessageBox.Show(
+            this,
+            message,
+            _remoteLocked ? "Máy đã bị khóa" : "Đã đăng xuất",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
     }
 
     private void HandleHeartbeatFailure(
@@ -1231,6 +1400,7 @@ public sealed class MainForm : Form
         {
             current.HeartbeatFailed -= HandleHeartbeatFailure;
             current.BalanceStatusChanged -= HandleBalanceStatusChanged;
+            current.HeartbeatReceived -= HandleHeartbeatReceived;
             await current.DisposeAsync();
         }
 
@@ -1297,6 +1467,7 @@ public sealed class MainForm : Form
         var client = new TcpClientAgent();
         client.HeartbeatFailed += HandleHeartbeatFailure;
         client.BalanceStatusChanged += HandleBalanceStatusChanged;
+        client.HeartbeatReceived += HandleHeartbeatReceived;
         _client = client;
 
         try
@@ -1360,6 +1531,7 @@ public sealed class MainForm : Form
             }
             client.HeartbeatFailed -= HandleHeartbeatFailure;
             client.BalanceStatusChanged -= HandleBalanceStatusChanged;
+            client.HeartbeatReceived -= HandleHeartbeatReceived;
             await client.DisposeAsync();
             _machineVerified = false;
             throw;

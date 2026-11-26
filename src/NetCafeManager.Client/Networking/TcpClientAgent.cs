@@ -24,6 +24,7 @@ internal sealed class TcpClientAgent : IAsyncDisposable
 
     public event Action<TcpClientAgent, Exception>? HeartbeatFailed;
     public event Action<TcpClientAgent, SessionBalanceStatus>? BalanceStatusChanged;
+    public event Action<TcpClientAgent, MachineHeartbeatAck>? HeartbeatReceived;
 
     public bool IsDisposed => Volatile.Read(ref _disposeStarted) == 1;
 
@@ -179,9 +180,13 @@ internal sealed class TcpClientAgent : IAsyncDisposable
                         result?.Message ?? "Server từ chối heartbeat.");
                 }
 
-                if (result.Value?.BalanceStatus is { } balanceStatus)
+                if (result.Value is { } acknowledgement)
                 {
-                    BalanceStatusChanged?.Invoke(this, balanceStatus);
+                    HeartbeatReceived?.Invoke(this, acknowledgement);
+                    if (acknowledgement.BalanceStatus is { } balanceStatus)
+                    {
+                        BalanceStatusChanged?.Invoke(this, balanceStatus);
+                    }
                 }
             }
         }

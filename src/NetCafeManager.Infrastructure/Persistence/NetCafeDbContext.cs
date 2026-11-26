@@ -19,6 +19,8 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
     public DbSet<RemoteCommand> RemoteCommands => Set<RemoteCommand>();
     public DbSet<BlockPolicy> BlockPolicies => Set<BlockPolicy>();
     public DbSet<PolicyViolation> PolicyViolations => Set<PolicyViolation>();
+    public DbSet<AdministrativeAudit> AdministrativeAudits => Set<AdministrativeAudit>();
+    public DbSet<MachineStatusHistory> MachineStatusHistories => Set<MachineStatusHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -35,6 +37,8 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
         ConfigureRemoteCommands(modelBuilder);
         ConfigureBlockPolicies(modelBuilder);
         ConfigurePolicyViolations(modelBuilder);
+        ConfigureAdministrativeAudits(modelBuilder);
+        ConfigureMachineStatusHistories(modelBuilder);
     }
 
     private static void ConfigureAccounts(ModelBuilder modelBuilder)
@@ -650,6 +654,88 @@ public sealed class NetCafeDbContext(DbContextOptions<NetCafeDbContext> options)
             entity.HasOne(violation => violation.BlockPolicy)
                 .WithMany(policy => policy.PolicyViolations)
                 .HasForeignKey(violation => violation.BlockPolicyId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureAdministrativeAudits(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AdministrativeAudit>(entity =>
+        {
+            entity.ToTable("NHAT_KY_QUAN_TRI");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.Id)
+                .HasColumnName("MaNhatKy")
+                .UseIdentityColumn();
+            entity.Property(audit => audit.AdministratorAccountId)
+                .HasColumnName("MaAdmin");
+            entity.Property(audit => audit.Action)
+                .HasColumnName("HanhDong")
+                .HasMaxLength(80)
+                .IsUnicode(false)
+                .IsRequired();
+            entity.Property(audit => audit.TargetType)
+                .HasColumnName("LoaiDoiTuong")
+                .HasMaxLength(50)
+                .IsUnicode(false)
+                .IsRequired();
+            entity.Property(audit => audit.TargetId)
+                .HasColumnName("MaDoiTuong")
+                .HasMaxLength(100);
+            entity.Property(audit => audit.Succeeded)
+                .HasColumnName("ThanhCong");
+            entity.Property(audit => audit.Description)
+                .HasColumnName("MoTa")
+                .HasMaxLength(500)
+                .IsRequired();
+            entity.Property(audit => audit.CreatedAtUtc)
+                .HasColumnName("ThoiDiem")
+                .HasColumnType("datetime2");
+
+            entity.HasIndex(audit => audit.CreatedAtUtc);
+            entity.HasOne(audit => audit.AdministratorAccount)
+                .WithMany(account => account.AdministrativeAudits)
+                .HasForeignKey(audit => audit.AdministratorAccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureMachineStatusHistories(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<MachineStatusHistory>(entity =>
+        {
+            entity.ToTable("LICH_SU_TRANG_THAI_MAY");
+            entity.HasKey(history => history.Id);
+            entity.Property(history => history.Id)
+                .HasColumnName("MaLichSu")
+                .UseIdentityColumn();
+            entity.Property(history => history.ComputerId)
+                .HasColumnName("MaMay");
+            entity.Property(history => history.AdministratorAccountId)
+                .HasColumnName("MaAdmin");
+            entity.Property(history => history.PreviousStatus)
+                .HasColumnName("TrangThaiCu")
+                .HasMaxLength(20)
+                .IsRequired();
+            entity.Property(history => history.NewStatus)
+                .HasColumnName("TrangThaiMoi")
+                .HasMaxLength(20)
+                .IsRequired();
+            entity.Property(history => history.Reason)
+                .HasColumnName("LyDo")
+                .HasMaxLength(500);
+            entity.Property(history => history.ChangedAtUtc)
+                .HasColumnName("ThoiDiem")
+                .HasColumnType("datetime2");
+
+            entity.HasIndex(history => new { history.ComputerId, history.ChangedAtUtc });
+            entity.HasOne(history => history.Computer)
+                .WithMany(computer => computer.StatusHistory)
+                .HasForeignKey(history => history.ComputerId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(history => history.AdministratorAccount)
+                .WithMany(account => account.MachineStatusChanges)
+                .HasForeignKey(history => history.AdministratorAccountId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

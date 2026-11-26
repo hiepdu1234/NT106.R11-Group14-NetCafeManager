@@ -13,4 +13,5 @@ public sealed class Computer
     public ICollection<UsageSession> UsageSessions { get; } = [];
     public ICollection<RemoteCommand> RemoteCommands { get; } = [];
     public ICollection<PolicyViolation> PolicyViolations { get; } = [];
+    public ICollection<MachineStatusHistory> StatusHistory { get; } = [];
 }

@@ -5,6 +5,7 @@ public static class NetworkMessageTypes
     public const string MachineHandshakeBegin = "MACHINE_HANDSHAKE_BEGIN";
     public const string MachineHandshakeComplete = "MACHINE_HANDSHAKE_COMPLETE";
     public const string MachineHeartbeat = "MACHINE_HEARTBEAT";
+    public const string MachineRemoteCommandResult = "MACHINE_REMOTE_COMMAND_RESULT";
 
     public const string AuthLogin = "AUTH_LOGIN";
     public const string AuthLogout = "AUTH_LOGOUT";
@@ -35,6 +36,12 @@ public static class NetworkMessageTypes
     public const string AdminInvoiceSetStatus = "ADMIN_INVOICE_SET_STATUS";
     public const string AdminRefundCreate = "ADMIN_REFUND_CREATE";
     public const string AdminRefundHistory = "ADMIN_REFUND_HISTORY";
+    public const string AdminMachineList = "ADMIN_MACHINE_LIST";
+    public const string AdminMachineSetStatus = "ADMIN_MACHINE_SET_STATUS";
+    public const string AdminMachineHistoryList = "ADMIN_MACHINE_HISTORY_LIST";
+    public const string AdminRemoteCommandQueue = "ADMIN_REMOTE_COMMAND_QUEUE";
+    public const string AdminRemoteCommandHistory = "ADMIN_REMOTE_COMMAND_HISTORY";
+    public const string AdminAuditList = "ADMIN_AUDIT_LIST";
 
     public const string CommandResult = "COMMAND_RESULT";
     public const string Error = "ERROR";

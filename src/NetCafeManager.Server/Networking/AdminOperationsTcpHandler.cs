@@ -1,9 +1,11 @@
 using System.Text.Json;
+using NetCafeManager.Server.Administration;
 using NetCafeManager.Server.Authentication;
 using NetCafeManager.Server.Billing;
 using NetCafeManager.Server.Customers;
 using NetCafeManager.Server.Inventory;
 using NetCafeManager.Server.Invoices;
+using NetCafeManager.Server.Machines;
 using NetCafeManager.Shared.Administration;
 using NetCafeManager.Shared.Authentication;
 using NetCafeManager.Shared.Billing;
@@ -36,7 +38,13 @@ public sealed class AdminOperationsTcpHandler
         NetworkMessageTypes.AdminInvoiceCreate,
         NetworkMessageTypes.AdminInvoiceSetStatus,
         NetworkMessageTypes.AdminRefundCreate,
-        NetworkMessageTypes.AdminRefundHistory
+        NetworkMessageTypes.AdminRefundHistory,
+        NetworkMessageTypes.AdminMachineList,
+        NetworkMessageTypes.AdminMachineSetStatus,
+        NetworkMessageTypes.AdminMachineHistoryList,
+        NetworkMessageTypes.AdminRemoteCommandQueue,
+        NetworkMessageTypes.AdminRemoteCommandHistory,
+        NetworkMessageTypes.AdminAuditList
     ];
 
     private readonly CustomerManagementService _customers;
@@ -46,6 +54,9 @@ public sealed class AdminOperationsTcpHandler
     private readonly InvoiceService _invoices;
     private readonly BalanceRefundService _refunds;
     private readonly AuthenticationService _authentication;
+    private readonly MachineAdministrationService? _machines;
+    private readonly RemoteCommandService? _remoteCommands;
+    private readonly AdministrativeAuditService? _audit;
 
     public AdminOperationsTcpHandler(
         CustomerManagementService customers,
@@ -54,7 +65,10 @@ public sealed class AdminOperationsTcpHandler
         ProductInventoryService inventory,
         InvoiceService invoices,
         BalanceRefundService refunds,
-        AuthenticationService authentication)
+        AuthenticationService authentication,
+        MachineAdministrationService? machines = null,
+        RemoteCommandService? remoteCommands = null,
+        AdministrativeAuditService? audit = null)
     {
         _customers = customers ?? throw new ArgumentNullException(nameof(customers));
         _hourPackages = hourPackages ?? throw new ArgumentNullException(nameof(hourPackages));
@@ -64,6 +78,9 @@ public sealed class AdminOperationsTcpHandler
         _refunds = refunds ?? throw new ArgumentNullException(nameof(refunds));
         _authentication = authentication
             ?? throw new ArgumentNullException(nameof(authentication));
+        _machines = machines;
+        _remoteCommands = remoteCommands;
+        _audit = audit;
     }
 
     public async Task<NetworkMessage?> HandleAsync(
@@ -85,6 +102,15 @@ public sealed class AdminOperationsTcpHandler
                 request,
                 "ADMIN_AUTHORIZATION_REQUIRED",
                 "Cần đăng nhập bằng tài khoản quản trị viên để thực hiện thao tác này.");
+        }
+
+        if (IsMachineAdministrationMessage(request.Type) &&
+            (_machines is null || _remoteCommands is null || _audit is null))
+        {
+            return NetworkResponseFactory.Error(
+                request,
+                "ADMIN_MACHINE_NOT_CONFIGURED",
+                "Server chưa cấu hình chức năng quản trị máy trạm.");
         }
 
         try
@@ -188,6 +214,42 @@ public sealed class AdminOperationsTcpHandler
                             context.User!,
                             Deserialize<CustomerIdRequest>(request).CustomerId,
                             cancellationToken)),
+                NetworkMessageTypes.AdminMachineList =>
+                    NetworkResponseFactory.Result(
+                        request,
+                        await _machines!.ListAsync(
+                            context.User!,
+                            cancellationToken)),
+                NetworkMessageTypes.AdminMachineSetStatus =>
+                    await SetMachineStatusAsync(
+                        request,
+                        context,
+                        cancellationToken),
+                NetworkMessageTypes.AdminMachineHistoryList =>
+                    NetworkResponseFactory.Result(
+                        request,
+                        await _machines!.ListHistoryAsync(
+                            context.User!,
+                            Deserialize<MachineStatusHistoryRequest>(request).ComputerId,
+                            cancellationToken)),
+                NetworkMessageTypes.AdminRemoteCommandQueue =>
+                    await QueueRemoteCommandAsync(
+                        request,
+                        context,
+                        cancellationToken),
+                NetworkMessageTypes.AdminRemoteCommandHistory =>
+                    NetworkResponseFactory.Result(
+                        request,
+                        await _remoteCommands!.ListAsync(
+                            context.User!,
+                            Deserialize<RemoteCommandHistoryRequest>(request).ComputerId,
+                            cancellationToken)),
+                NetworkMessageTypes.AdminAuditList =>
+                    NetworkResponseFactory.Result(
+                        request,
+                        await _audit!.ListRecentAsync(
+                            context.User!,
+                            cancellationToken)),
                 _ => null
             };
         }
@@ -198,6 +260,59 @@ public sealed class AdminOperationsTcpHandler
                 "ADMIN_INVALID_REQUEST",
                 "Dữ liệu thao tác quản trị không hợp lệ.");
         }
+        catch (UnauthorizedAccessException)
+        {
+            return NetworkResponseFactory.Error(
+                request,
+                "ADMIN_FORBIDDEN",
+                "Tài khoản hiện tại không có quyền quản trị.");
+        }
+    }
+
+    private async Task<NetworkMessage> SetMachineStatusAsync(
+        NetworkMessage request,
+        TcpConnectionContext context,
+        CancellationToken cancellationToken)
+    {
+        SetMachineStatusRequest payload =
+            Deserialize<SetMachineStatusRequest>(request);
+        AdminResult<MachineAdminSummary> result =
+            await _machines!.SetStatusAsync(
+                context.User!,
+                payload,
+                cancellationToken);
+        await _audit!.TryRecordAsync(
+            context.User!,
+            request.Type,
+            "Computer",
+            payload.ComputerId.ToString(),
+            result.IsSuccess,
+            result.Message,
+            cancellationToken);
+        return NetworkResponseFactory.Result(request, result);
+    }
+
+    private async Task<NetworkMessage> QueueRemoteCommandAsync(
+        NetworkMessage request,
+        TcpConnectionContext context,
+        CancellationToken cancellationToken)
+    {
+        QueueRemoteCommandRequest payload =
+            Deserialize<QueueRemoteCommandRequest>(request);
+        AdminResult<RemoteCommandSummary> result =
+            await _remoteCommands!.QueueAsync(
+                context.User!,
+                payload,
+                cancellationToken);
+        await _audit!.TryRecordAsync(
+            context.User!,
+            request.Type,
+            "Computer",
+            payload.ComputerId.ToString(),
+            result.IsSuccess,
+            result.Message,
+            cancellationToken);
+        return NetworkResponseFactory.Result(request, result);
     }
 
     private async Task<NetworkMessage> SetInvoiceStatusAsync(
@@ -231,4 +346,12 @@ public sealed class AdminOperationsTcpHandler
             ?? throw new JsonException(
                 $"Không đọc được dữ liệu {typeof(T).Name}.");
     }
+
+    private static bool IsMachineAdministrationMessage(string type) => type is
+        NetworkMessageTypes.AdminMachineList or
+        NetworkMessageTypes.AdminMachineSetStatus or
+        NetworkMessageTypes.AdminMachineHistoryList or
+        NetworkMessageTypes.AdminRemoteCommandQueue or
+        NetworkMessageTypes.AdminRemoteCommandHistory or
+        NetworkMessageTypes.AdminAuditList;
 }

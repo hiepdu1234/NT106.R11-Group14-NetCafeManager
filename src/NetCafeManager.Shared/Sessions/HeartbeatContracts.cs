@@ -12,7 +12,9 @@ public sealed record MachineHeartbeatAck(
     int ComputerId,
     DateTimeOffset ReceivedAt,
     int NextHeartbeatAfterSeconds,
-    SessionBalanceStatus? BalanceStatus = null);
+    SessionBalanceStatus? BalanceStatus = null,
+    Administration.PendingRemoteCommand? PendingCommand = null,
+    string? ComputerStatus = null);
 
 public sealed record SessionBalanceStatus(
     bool HasActiveSession,
