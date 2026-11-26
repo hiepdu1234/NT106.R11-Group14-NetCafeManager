@@ -5,6 +5,7 @@ using NetCafeManager.Shared.Customers;
 using NetCafeManager.Shared.Inventory;
 using NetCafeManager.Shared.Invoices;
 using NetCafeManager.Shared.Networking;
+using NetCafeManager.Shared.Sessions;
 
 namespace NetCafeManager.Client;
 
@@ -19,6 +20,8 @@ internal sealed class AdminDashboardControl : UserControl
     private readonly DataGridView _packages = CreateGrid();
     private readonly DataGridView _inventory = CreateGrid();
     private readonly DataGridView _invoices = CreateGrid();
+    private readonly DataGridView _machines = CreateGrid();
+    private readonly DataGridView _audit = CreateGrid();
     private readonly List<HourPackageSummary> _packageItems = [];
     private int _busy;
 
@@ -40,6 +43,8 @@ internal sealed class AdminDashboardControl : UserControl
         await LoadPackagesAsync(cancellationToken);
         await LoadInventoryAsync(cancellationToken);
         await LoadInvoicesAsync(cancellationToken);
+        await LoadMachinesAsync(cancellationToken);
+        await LoadAuditAsync(cancellationToken);
     }
 
     public void Clear()
@@ -48,6 +53,8 @@ internal sealed class AdminDashboardControl : UserControl
         _packages.Rows.Clear();
         _inventory.Rows.Clear();
         _invoices.Rows.Clear();
+        _machines.Rows.Clear();
+        _audit.Rows.Clear();
         _packageItems.Clear();
     }
 
@@ -62,6 +69,8 @@ internal sealed class AdminDashboardControl : UserControl
         tabs.TabPages.Add(BuildPackageTab());
         tabs.TabPages.Add(BuildInventoryTab());
         tabs.TabPages.Add(BuildInvoiceTab());
+        tabs.TabPages.Add(BuildMachineTab());
+        tabs.TabPages.Add(BuildAuditTab());
         Controls.Add(tabs);
     }
 
@@ -143,6 +152,45 @@ internal sealed class AdminDashboardControl : UserControl
             ("Lập từ mã phiên", CreateInvoiceAsync),
             ("Đã thanh toán", () => SetInvoiceStatusAsync(InvoiceStatuses.Paid)),
             ("Chưa thanh toán", () => SetInvoiceStatusAsync(InvoiceStatuses.Unpaid)));
+    }
+
+    private TabPage BuildMachineTab()
+    {
+        ConfigureColumns(_machines,
+            ("Id", "Mã máy", 60),
+            ("Name", "Tên máy", 120),
+            ("IpAddress", "Địa chỉ IP", 120),
+            ("Status", "Trạng thái", 100),
+            ("LastHeartbeat", "Heartbeat cuối", 150),
+            ("ActiveSession", "Đang có phiên", 90),
+            ("Reason", "Lý do", 180));
+
+        return CreateTab(
+            "Máy trạm",
+            _machines,
+            ("Làm mới", () => LoadMachinesAsync()),
+            ("Đổi trạng thái", SetMachineStatusAsync),
+            ("Lịch sử trạng thái", ShowMachineHistoryAsync),
+            ("Khóa máy", () => QueueRemoteCommandAsync(RemoteCommandTypes.LockComputer)),
+            ("Đăng xuất máy", () => QueueRemoteCommandAsync(RemoteCommandTypes.LogoutComputer)),
+            ("Lịch sử lệnh", ShowRemoteCommandHistoryAsync));
+    }
+
+    private TabPage BuildAuditTab()
+    {
+        ConfigureColumns(_audit,
+            ("Id", "Mã", 55),
+            ("Administrator", "Quản trị viên", 110),
+            ("Action", "Hành động", 150),
+            ("Target", "Đối tượng", 120),
+            ("Succeeded", "Thành công", 75),
+            ("Description", "Mô tả", 220),
+            ("CreatedAt", "Thời điểm", 145));
+
+        return CreateTab(
+            "Nhật ký quản trị",
+            _audit,
+            ("Làm mới", () => LoadAuditAsync()));
     }
 
     private TabPage CreateTab(
@@ -536,6 +584,173 @@ internal sealed class AdminDashboardControl : UserControl
         await LoadInvoicesAsync();
     }
 
+    private async Task LoadMachinesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        List<MachineAdminSummary> items =
+            await SendAsync<List<MachineAdminSummary>>(
+                NetworkMessageTypes.AdminMachineList,
+                new { },
+                cancellationToken);
+        _machines.Rows.Clear();
+        foreach (MachineAdminSummary item in items)
+        {
+            int index = _machines.Rows.Add(
+                item.Id,
+                item.Name,
+                item.IpAddress ?? string.Empty,
+                item.Status,
+                item.LastHeartbeatAt?.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss")
+                    ?? "Chưa có",
+                item.HasActiveSession ? "Có" : "Không",
+                item.MaintenanceReason ?? string.Empty);
+            DataGridViewRow row = _machines.Rows[index];
+            row.Tag = item;
+            row.DefaultCellStyle.BackColor = item.Status switch
+            {
+                ComputerStatuses.Available => Color.Honeydew,
+                ComputerStatuses.InUse => Color.LightCyan,
+                ComputerStatuses.Maintenance => Color.LemonChiffon,
+                ComputerStatuses.Incident => Color.MistyRose,
+                ComputerStatuses.Disconnected => Color.Gainsboro,
+                ComputerStatuses.Locked => Color.LightGray,
+                _ => Color.White
+            };
+        }
+        SelectFirst(_machines);
+    }
+
+    private async Task LoadAuditAsync(
+        CancellationToken cancellationToken = default)
+    {
+        List<AdministrativeAuditSummary> items =
+            await SendAsync<List<AdministrativeAuditSummary>>(
+                NetworkMessageTypes.AdminAuditList,
+                new { },
+                cancellationToken);
+        _audit.Rows.Clear();
+        foreach (AdministrativeAuditSummary item in items)
+        {
+            int index = _audit.Rows.Add(
+                item.Id,
+                item.AdministratorUsername,
+                item.Action,
+                $"{item.TargetType}: {item.TargetId ?? "-"}",
+                item.Succeeded ? "Có" : "Không",
+                item.Description,
+                item.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss"));
+            _audit.Rows[index].Tag = item;
+            _audit.Rows[index].DefaultCellStyle.BackColor =
+                item.Succeeded ? Color.Honeydew : Color.MistyRose;
+        }
+        SelectFirst(_audit);
+    }
+
+    private async Task SetMachineStatusAsync()
+    {
+        MachineAdminSummary machine = SelectedMachine();
+        using var dialog = new AdminInputDialog($"Đổi trạng thái {machine.Name}");
+        string[] statuses =
+        [
+            ComputerStatuses.Available,
+            ComputerStatuses.Locked,
+            ComputerStatuses.Maintenance,
+            ComputerStatuses.Incident
+        ];
+        ComboBox status = dialog.AddCombo(
+            "Trạng thái",
+            statuses,
+            value => value);
+        status.SelectedItem = statuses.Contains(machine.Status)
+            ? machine.Status
+            : ComputerStatuses.Available;
+        TextBox reason = dialog.AddText(
+            "Lý do",
+            machine.MaintenanceReason ?? string.Empty);
+        if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
+        {
+            return;
+        }
+
+        AdminResult<MachineAdminSummary> result =
+            await SendAsync<AdminResult<MachineAdminSummary>>(
+                NetworkMessageTypes.AdminMachineSetStatus,
+                new SetMachineStatusRequest(
+                    machine.Id,
+                    status.SelectedItem?.ToString(),
+                    reason.Text));
+        EnsureSuccess(result.IsSuccess, result.Message);
+        await LoadMachinesAsync();
+    }
+
+    private async Task ShowMachineHistoryAsync()
+    {
+        MachineAdminSummary machine = SelectedMachine();
+        List<MachineStatusHistorySummary> history =
+            await SendAsync<List<MachineStatusHistorySummary>>(
+                NetworkMessageTypes.AdminMachineHistoryList,
+                new MachineStatusHistoryRequest(machine.Id));
+        string text = string.Join(
+            Environment.NewLine,
+            history.Select(item =>
+                $"{item.ChangedAt.ToLocalTime():dd/MM/yyyy HH:mm} | " +
+                $"{item.PreviousStatus} -> {item.NewStatus} | " +
+                $"{item.AdministratorUsername} | {item.Reason ?? "Không có lý do"}"));
+        MessageBox.Show(
+            FindForm(),
+            text.Length == 0 ? "Chưa có lịch sử thay đổi." : text,
+            $"Lịch sử trạng thái - {machine.Name}",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
+    private async Task QueueRemoteCommandAsync(string commandType)
+    {
+        MachineAdminSummary machine = SelectedMachine();
+        string action = commandType == RemoteCommandTypes.LockComputer
+            ? "khóa"
+            : "đăng xuất tài khoản trên";
+        if (MessageBox.Show(
+                FindForm(),
+                $"Gửi lệnh {action} máy {machine.Name}?",
+                "Xác nhận lệnh điều khiển",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        AdminResult<RemoteCommandSummary> result =
+            await SendAsync<AdminResult<RemoteCommandSummary>>(
+                NetworkMessageTypes.AdminRemoteCommandQueue,
+                new QueueRemoteCommandRequest(machine.Id, commandType));
+        EnsureSuccess(result.IsSuccess, result.Message);
+        _setStatus(result.Message, false);
+        await LoadAuditAsync();
+    }
+
+    private async Task ShowRemoteCommandHistoryAsync()
+    {
+        MachineAdminSummary machine = SelectedMachine();
+        List<RemoteCommandSummary> history =
+            await SendAsync<List<RemoteCommandSummary>>(
+                NetworkMessageTypes.AdminRemoteCommandHistory,
+                new RemoteCommandHistoryRequest(machine.Id));
+        string text = string.Join(
+            Environment.NewLine,
+            history.Select(item =>
+                $"{item.SentAt.ToLocalTime():dd/MM/yyyy HH:mm} | " +
+                $"{item.CommandType} | {item.Status} | " +
+                $"{item.AdministratorUsername}" +
+                (item.ErrorCode is null ? string.Empty : $" | Lỗi: {item.ErrorCode}")));
+        MessageBox.Show(
+            FindForm(),
+            text.Length == 0 ? "Chưa có lệnh điều khiển." : text,
+            $"Lịch sử lệnh - {machine.Name}",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+
     private async Task<T> SendAsync<T>(
         string type,
         object payload,
@@ -574,6 +789,13 @@ internal sealed class AdminDashboardControl : UserControl
         DataGridViewRow row = SelectedRow(_invoices, "Hãy chọn hóa đơn.");
         return row.Tag as InvoiceSummary
             ?? throw new InvalidOperationException("Không đọc được hóa đơn đã chọn.");
+    }
+
+    private MachineAdminSummary SelectedMachine()
+    {
+        DataGridViewRow row = SelectedRow(_machines, "Hãy chọn máy trạm.");
+        return row.Tag as MachineAdminSummary
+            ?? throw new InvalidOperationException("Không đọc được máy trạm đã chọn.");
     }
 
     private static DataGridViewRow SelectedRow(DataGridView grid, string message) =>

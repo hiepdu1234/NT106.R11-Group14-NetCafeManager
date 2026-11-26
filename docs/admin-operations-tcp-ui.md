@@ -12,6 +12,9 @@
 - Gói giờ: tạo, sửa giá/số giờ và bật/tắt áp dụng.
 - Kho/sản phẩm: tạo, sửa, nhập/xuất tồn kho và xóa mục chưa phát sinh giao dịch.
 - Hóa đơn: lập từ phiên đã kết thúc, xem danh sách và xác nhận thanh toán.
+- Máy trạm: xem trạng thái/heartbeat, đổi trạng thái, khóa hoặc đăng xuất từ xa,
+  xem lịch sử trạng thái và lịch sử lệnh.
+- Nhật ký quản trị: xem các thao tác đổi trạng thái và xếp lệnh điều khiển.
 
 Mọi lệnh `ADMIN_*` đều đi qua TCP. Server xác minh token và vai trò quản trị
 trước khi gọi service; các service vẫn kiểm tra quyền lần thứ hai.
@@ -87,6 +90,7 @@ dotnet run --project .\tests\NetCafeManager.AdminOperationsSmoke --configuration
 dotnet run --project .\tests\NetCafeManager.SessionSmoke --configuration Release
 dotnet run --project .\tests\NetCafeManager.NetworkResilienceSmoke --configuration Release
 dotnet run --project .\tests\NetCafeManager.ClientReconnectSmoke --configuration Release
+dotnet run --project .\tests\NetCafeManager.RemoteMachineControlSmoke --configuration Release
 ```
 
 Hai smoke test dùng SQL Server cần biến kết nối tương ứng như mô tả trong các

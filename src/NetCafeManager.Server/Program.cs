@@ -9,6 +9,7 @@ using NetCafeManager.Server.Inventory;
 using NetCafeManager.Server.Billing;
 using NetCafeManager.Server.Customers;
 using NetCafeManager.Server.Invoices;
+using NetCafeManager.Server.Administration;
 using System.Security.Cryptography.X509Certificates;
 
 namespace NetCafeManager.Server;
@@ -55,6 +56,7 @@ internal static class Program
             var usageSessions = new UsageSessionService(
                 connectionString,
                 hourlyRate);
+            var remoteCommands = new RemoteCommandService(connectionString);
 
             var authHandler = new AuthTcpHandler(
                 authentication.Authentication);
@@ -64,7 +66,8 @@ internal static class Program
             var machineHandler = new MachineTcpHandler(
                 handshakes,
                 heartbeats,
-                sessionHandler);
+                sessionHandler,
+                remoteCommands);
             var passwordResetHandler = new PasswordResetTcpHandler(
                 authentication.PasswordReset);
             var productPurchaseHandler = new ProductPurchaseTcpHandler(
@@ -78,7 +81,10 @@ internal static class Program
                 new ProductInventoryService(connectionString),
                 new InvoiceService(connectionString),
                 new BalanceRefundService(connectionString),
-                authentication.Authentication);
+                authentication.Authentication,
+                new MachineAdministrationService(connectionString),
+                remoteCommands,
+                new AdministrativeAuditService(connectionString));
 
             int port = ReadPort();
             IPAddress listenAddress = ReadListenAddress();
