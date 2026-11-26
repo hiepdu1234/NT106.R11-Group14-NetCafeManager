@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
 using NetCafeManager.Infrastructure.Persistence;
 using NetCafeManager.Infrastructure.Persistence.Entities;
@@ -111,6 +112,14 @@ public sealed class MachineAdministrationService
         }
 
         await using var db = new NetCafeDbContext(_options);
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await AcquireComputerLockAsync(
+            db,
+            request.ComputerId,
+            cancellationToken);
+
         var machine = await db.Computers
             .Include(row => row.UsageSessions)
             .SingleOrDefaultAsync(row => row.Id == request.ComputerId, cancellationToken);
@@ -138,6 +147,7 @@ public sealed class MachineAdministrationService
             : null;
         if (previousStatus == status && previousReason == newReason)
         {
+            await transaction.CommitAsync(cancellationToken);
             return AdminResult<MachineAdminSummary>.Success(
                 new MachineAdminSummary(
                     machine.Id,
@@ -165,6 +175,7 @@ public sealed class MachineAdministrationService
             ChangedAtUtc = _clock.GetUtcNow().UtcDateTime
         });
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return AdminResult<MachineAdminSummary>.Success(
             new MachineAdminSummary(
@@ -179,6 +190,25 @@ public sealed class MachineAdministrationService
                 machine.MaintenanceReason,
                 false),
             "Machine status was updated.");
+    }
+
+    private static Task<int> AcquireComputerLockAsync(
+        NetCafeDbContext db,
+        int computerId,
+        CancellationToken cancellationToken)
+    {
+        string resource =
+            $"NetCafeManager:UsageSession:Computer:{computerId}";
+        return db.Database.ExecuteSqlInterpolatedAsync($"""
+            DECLARE @LockResult int;
+            EXEC @LockResult = sys.sp_getapplock
+                @Resource = {resource},
+                @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction',
+                @LockTimeout = 5000;
+            IF @LockResult < 0
+                THROW 51002, N'Could not lock the workstation state.', 1;
+            """, cancellationToken);
     }
 
     private static void EnsureAdministrator(AuthenticatedUser actor)
