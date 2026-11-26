@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string[]]$MachineNames = @("MAY-01", "MAY-02"),
     [decimal]$HourlyRate = 10000
 )
