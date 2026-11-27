@@ -37,14 +37,37 @@ internal sealed class AdminDashboardControl : UserControl
         BuildLayout();
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<string>> InitializeAsync(
+        CancellationToken cancellationToken = default)
     {
-        await LoadCustomersAsync(cancellationToken);
-        await LoadPackagesAsync(cancellationToken);
-        await LoadInventoryAsync(cancellationToken);
-        await LoadInvoicesAsync(cancellationToken);
-        await LoadMachinesAsync(cancellationToken);
-        await LoadAuditAsync(cancellationToken);
+        var failures = new List<string>();
+        await TryLoadSectionAsync("khách hàng", LoadCustomersAsync, failures, cancellationToken);
+        await TryLoadSectionAsync("gói giờ", LoadPackagesAsync, failures, cancellationToken);
+        await TryLoadSectionAsync("kho / sản phẩm", LoadInventoryAsync, failures, cancellationToken);
+        await TryLoadSectionAsync("hóa đơn", LoadInvoicesAsync, failures, cancellationToken);
+        await TryLoadSectionAsync("máy trạm", LoadMachinesAsync, failures, cancellationToken);
+        await TryLoadSectionAsync("nhật ký", LoadAuditAsync, failures, cancellationToken);
+        return failures;
+    }
+
+    private static async Task TryLoadSectionAsync(
+        string sectionName,
+        Func<CancellationToken, Task> load,
+        ICollection<string> failures,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await load(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            failures.Add($"{sectionName}: yêu cầu bị hủy hoặc hết thời gian");
+        }
+        catch (Exception exception)
+        {
+            failures.Add($"{sectionName}: {exception.Message}");
+        }
     }
 
     public void Clear()
