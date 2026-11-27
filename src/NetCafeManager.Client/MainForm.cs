@@ -1715,13 +1715,34 @@ public sealed class MainForm : Form
             {
                 _adminWelcome.Text =
                     $"Xin chào {result.User.Username}. Bạn đã đăng nhập với quyền quản trị.";
-                await _adminDashboard.InitializeAsync(timeout.Token);
             }
+
+            // Đăng nhập và điều hướng giao diện là một bước riêng với tải dữ liệu.
+            // Một tab quản trị tải lỗi không được giữ người dùng ở màn hình đăng nhập.
             _authenticated = true;
             ShowPage(result.User.Role == UserRole.Client
                 ? "client-dashboard"
                 : "admin-dashboard");
             UpdateButtonStates();
+
+            if (result.User.Role == UserRole.Administrator)
+            {
+                SetStatus(
+                    $"Đăng nhập thành công: {username}. Đang tải dữ liệu quản trị...",
+                    success: true);
+                IReadOnlyList<string> failures =
+                    await _adminDashboard.InitializeAsync(timeout.Token);
+                if (failures.Count > 0)
+                {
+                    SetStatus(
+                        "Giao diện quản trị đã mở. Chưa tải được: " +
+                        string.Join("; ", failures) +
+                        ". Bạn có thể dùng nút Làm mới trong từng tab.",
+                        error: true);
+                    return;
+                }
+            }
+
             SetStatus($"Đăng nhập thành công: {username}.", success: true);
         }
         finally
